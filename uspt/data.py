@@ -11,7 +11,7 @@ def make_xform_annotator():
         hsvds = tf.random.uniform([3]) * 2.0 - 1.0
         # change hue, saturation, and value
         x = tf.image.rgb_to_hsv(x[..., :3])
-        x = tf.clip_by_value(tf.math.abs(x + hsvds * 0.25), 0.0, 1.0)
+        x = tf.clip_by_value(tf.math.abs(x + hsvds * 0.027), 0.0, 1.0)
         x = tf.image.hsv_to_rgb(x)
 
         # affine transforms
@@ -24,7 +24,7 @@ def make_xform_annotator():
             tfa.image.translations_to_projective_transforms(delta * img_size * 0.25),
         ]
         xforms = tfa.image.compose_transforms(xforms)
-        x = tfa.image.transform(x, xforms, fill_mode="wrap")
+        x = tfa.image.transform(x, xforms, fill_mode="reflect")
 
         # summarize our changes for the synthetic objective
         y = dict(hsv_offset=hsvds, rot_factor=theta, tsl_offset=delta)
@@ -96,7 +96,7 @@ def read_records(shards):
     )
 
 
-def make_dataset(image_shape, shards, roi_splits=4, top_tiles=4):
+def make_dataset(image_shape, shards, roi_splits=2, top_tiles=2):
     return (
         read_records(shards)
         .map(

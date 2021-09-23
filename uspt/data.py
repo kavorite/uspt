@@ -11,7 +11,7 @@ def make_xform_annotator():
         hsvds = tf.random.uniform([3]) * 2.0 - 1.0
         # change hue, saturation, and value
         x = tf.image.rgb_to_hsv(x[..., :3])
-        x = tf.clip_by_value(tf.math.abs(x + hsvds * 0.027), 0.0, 1.0)
+        x = tf.clip_by_value(tf.math.abs(x + hsvds * 0.04), 0.0, 1.0)
         x = tf.image.hsv_to_rgb(x)
 
         # affine transforms
@@ -51,6 +51,13 @@ def make_preprocessor(img_shape, roi_splits, top_tiles):
             lambda: img,
         )
         img = tf.image.resize(img, tile_size * roi_splits)
+        tiles = tf.image.extract_patches(
+            img[None, ...],
+            sizes=[1, tile_size[0], tile_size[1], 1],
+            strides=[1, tile_size[0] // 2, tile_size[1] // 2, 1],
+            rates=[1, 1, 1, 1],
+            padding="VALID",
+        )
         tiles = tf.reshape(
             img, tf.concat([[tf.reduce_prod(roi_splits)], img_shape], axis=-1)
         )

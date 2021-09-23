@@ -33,7 +33,7 @@ def make_xform_annotator():
     return xform_and_annotate
 
 
-def make_preprocessor(img_shape, roi_splits, top_tiles):
+def make_preprocessor(img_shape, roi_splits):
     if isinstance(roi_splits, int):
         roi_splits = [roi_splits] * 2
 
@@ -61,10 +61,10 @@ def make_preprocessor(img_shape, roi_splits, top_tiles):
         tiles = tf.reshape(
             img, tf.concat([[tf.reduce_prod(roi_splits)], img_shape], axis=-1)
         )
-        grads = tf.reduce_mean(tf.image.sobel_edges(tiles), -1 - tf.range(4))
-        grads = tf.gather(grads, tf.argsort(grads)[::-1][:top_tiles])
-        roi = tf.squeeze(tf.random.categorical(tf.expand_dims(grads, 0), 1))
-        return tiles[roi]
+        grads = tf.reduce_mean(
+            tf.image.sobel_edges(tfa.image.gaussian_filter2d(tiles)), -1 - tf.range(4)
+        )
+        return tiles[tf.argmax(grads)]
 
     return preprocess
 
@@ -103,11 +103,11 @@ def read_records(shards):
     )
 
 
-def make_dataset(image_shape, shards, roi_splits=2, top_tiles=2):
+def make_dataset(image_shape, shards, roi_splits=2):
     return (
         read_records(shards)
         .map(
-            make_preprocessor(image_shape, roi_splits, top_tiles),
+            make_preprocessor(image_shape, roi_splits),
             num_parallel_calls=os.cpu_count(),
             deterministic=False,
         )

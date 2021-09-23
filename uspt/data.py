@@ -8,15 +8,17 @@ import tensorflow_addons as tfa
 def make_xform_annotator():
     def xform_and_annotate(x):
         img_size = tf.cast(tf.shape(x)[-3:-1], tf.float32)
-        hsvds = tf.random.uniform([3]) - 0.5
+        hsvds = tf.random.uniform([3]) * 2.0 - 1.0
         # change hue, saturation, and value
         x = tf.image.rgb_to_hsv(x[..., :3])
-        x = tf.math.abs(x + hsvds) % 1  # wrap values around through their mantissa
+        x = (
+            tf.math.abs(x + hsvds * 0.25)
+        ) % 1  # wrap values around through their mantissa
         x = tf.image.hsv_to_rgb(x)
 
         # affine transforms
-        theta = tf.random.uniform([1]) - 0.5
-        delta = tf.random.uniform([2]) - 0.5
+        theta = tf.random.uniform([1]) * 2.0 - 1.0
+        delta = tf.random.uniform([2]) * 2.0 - 1.0
         xforms = [
             tfa.image.angles_to_projective_transforms(
                 theta * 0.25 * math.pi, img_size[0], img_size[1]

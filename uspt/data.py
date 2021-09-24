@@ -5,13 +5,13 @@ import tensorflow as tf
 import tensorflow_addons as tfa
 
 
-def make_xform_annotator():
+def make_xform_annotator(hsv_factor=0.05, tls_factor=0.25, rot_factor=0.25):
     def xform_and_annotate(x):
         img_size = tf.cast(tf.shape(x)[-3:-1], tf.float32)
         hsvds = tf.random.uniform([3]) * 2.0 - 1.0
         # change hue, saturation, and value
         x = tf.image.rgb_to_hsv(x[..., :3])
-        x = tf.clip_by_value(tf.math.abs(x + hsvds * 0.05), 0.0, 1.0)
+        x = tf.clip_by_value(tf.math.abs(x + hsvds * hsv_factor), 0.0, 1.0)
         x = tf.image.hsv_to_rgb(x)
 
         # affine transforms
@@ -19,12 +19,14 @@ def make_xform_annotator():
         delta = tf.random.uniform([2]) * 2.0 - 1.0
         xforms = [
             tfa.image.angles_to_projective_transforms(
-                theta * 0.25 * math.pi, img_size[0], img_size[1]
+                theta * rot_factor * math.pi, img_size[0], img_size[1]
             ),
-            tfa.image.translations_to_projective_transforms(delta * img_size * 0.25),
+            tfa.image.translations_to_projective_transforms(
+                delta * img_size * tls_factor
+            ),
         ]
         xforms = tfa.image.compose_transforms(xforms)
-        x = tfa.image.transform(x, xforms, fill_mode="reflect")
+        x = tfa.image.transform(x, xforms, fill_mode="nearest")
 
         # summarize our changes for the synthetic objective
         y = dict(hsv_offset=hsvds, rot_factor=theta, tsl_offset=delta)
@@ -103,7 +105,9 @@ def read_records(shards):
     )
 
 
-def make_dataset(image_shape, shards, roi_splits=1):
+def make_dataset(
+    image_shape, shards, roi_splits=1, hsv_factor=0.05, tls_factor=0.25, rot_factor=0.25
+):
     return (
         read_records(shards)
         .map(
@@ -111,6 +115,6 @@ def make_dataset(image_shape, shards, roi_splits=1):
             num_parallel_calls=os.cpu_count(),
             deterministic=False,
         )
-        .map(make_xform_annotator())
-        # .apply(tf.data.experimental.ignore_errors())
+        .map(make_xform_annotator(hsv_factor, tls_factor, rot_factor))
+        .apply(tf.data.experimental.ignore_errors())
     )

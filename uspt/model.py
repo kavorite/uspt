@@ -28,7 +28,13 @@ def build_model(image_shape, surrogate=None):
     if tf.rank(tf.squeeze(surrogate.predict(dummy_input))) != 1:
         # learned, volumetric downsampling
         x = squeeze_excitation(x, 1)
-        x = tf.keras.layers.SeparableConv2D(1280, x.shape[-3:-1], strides=1)(x)
+        x = tf.keras.layers.SeparableConv2D(
+            1280,
+            x.shape[-3:-1],
+            strides=1,
+            use_bias=False,
+            kernel_initializer="he_normal",
+        )(x)
     x = tf.keras.layers.Flatten()(x)
     lns = iter(tf.keras.layers.LayerNormalization() for _ in range(4))
     hsvds = tf.keras.layers.Dense(3, name="hsv_offset")(next(lns)(x))

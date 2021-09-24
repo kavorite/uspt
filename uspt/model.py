@@ -42,3 +42,11 @@ def build_model(image_shape, surrogate=None):
     return tf.keras.Model(
         surrogate.input, output, name=surrogate.name + "_unsupervised"
     )
+
+
+def model_stem(model):
+    trunc = None
+    for layer in model.layers:
+        if isinstance(layer, tf.keras.layers.Flatten):
+            trunc = layer
+    return trunc

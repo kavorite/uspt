@@ -3,9 +3,13 @@ import os
 
 import tensorflow as tf
 import tensorflow_addons as tfa
+from tensorflow._api.v2.data import experimental
+from tensorflow.python.data.experimental.ops.error_ops import ignore_errors
 
 
-def make_xform_annotator(hsv_factor=0.05, tls_factor=0.25, rot_factor=0.25):
+def make_xform_annotator(
+    hsv_factor=0.05, tls_factor=0.25, rot_factor=0.25, scl_factor=0.25
+):
     def xform_and_annotate(x):
         img_size = tf.cast(tf.shape(x)[-3:-1], tf.float32)
         hsvds = tf.random.uniform([3]) * 2.0 - 1.0
@@ -14,6 +18,9 @@ def make_xform_annotator(hsv_factor=0.05, tls_factor=0.25, rot_factor=0.25):
         x = tf.clip_by_value(tf.math.abs(x + hsvds * hsv_factor), 0.0, 1.0)
         x = tf.image.hsv_to_rgb(x)
 
+        alpha = tf.random.uniform([])
+        tf.image.central_crop(x, alpha * scl_factor)
+        alpha = [alpha * 2.0 - 1.0]
         # affine transforms
         theta = tf.random.uniform([1]) * 2.0 - 1.0
         delta = tf.random.uniform([2]) * 2.0 - 1.0
@@ -29,7 +36,9 @@ def make_xform_annotator(hsv_factor=0.05, tls_factor=0.25, rot_factor=0.25):
         x = tfa.image.transform(x, xforms, fill_mode="nearest")
 
         # summarize our changes for the synthetic objective
-        y = dict(hsv_offset=hsvds, rot_factor=theta, tsl_offset=delta)
+        y = dict(
+            hsv_offset=hsvds, rot_factor=theta, tsl_offset=delta, scl_factor=scl_factor
+        )
         return x, y
 
     return xform_and_annotate
@@ -66,17 +75,13 @@ def make_preprocessor(img_shape, roi_splits):
         grads = tf.reduce_mean(
             tf.image.sobel_edges(tfa.image.gaussian_filter2d(tiles)), -1 - tf.range(4)
         )
-        return tiles[tf.argmax(grads)]
+        x = tiles[tf.argmax(grads)]
+        return x, record
 
     return preprocess
 
 
-def record_parser():
-    feature_desc = dict(
-        image_str=tf.io.FixedLenFeature((), tf.string),
-        tag_names=tf.io.FixedLenFeature((), tf.string),
-    )
-
+def record_parser(feature_desc):
     @tf.function
     def parse(record):
         return tf.io.parse_single_example(record, feature_desc)
@@ -84,7 +89,7 @@ def record_parser():
     return parse
 
 
-def read_records(shards):
+def read_records(shards, deserialize):
     return (
         tf.data.Dataset.from_tensor_slices(shards)
         .shuffle(len(shards))
@@ -92,7 +97,7 @@ def read_records(shards):
         .interleave(
             lambda shard: (
                 tf.data.TFRecordDataset(shard).map(
-                    record_parser(),
+                    deserialize,
                     num_parallel_calls=1,
                 )
             ),
@@ -106,15 +111,45 @@ def read_records(shards):
 
 
 def make_dataset(
-    image_shape, shards, roi_splits=1, hsv_factor=0.05, tls_factor=0.25, rot_factor=0.25
+    image_shape,
+    shards,
+    deserialize=record_parser(
+        feature_desc=dict(image_str=tf.io.FixedLenFeature((), tf.string))
+    ),
+    roi_splits=1,
+    hsv_factor=0.05,
+    tls_factor=0.25,
+    rot_factor=0.25,
 ):
     return (
-        read_records(shards)
+        read_records(shards, deserialize)
         .map(
             make_preprocessor(image_shape, roi_splits),
             num_parallel_calls=os.cpu_count(),
             deterministic=False,
         )
+        .map(lambda x, _: x)
         .map(make_xform_annotator(hsv_factor, tls_factor, rot_factor))
+        .apply(tf.data.experimental.ignore_errors())
+    )
+
+
+def supervised_dataset(
+    image_shape,
+    shards,
+    deserialize=record_parser(
+        feature_desc=dict(
+            image_str=tf.io.FixedLenFeature((), tf.string),
+            tag_names=tf.io.FixedLenFeature((), tf.string),
+        )
+    ),
+):
+    return (
+        read_records(shards, deserialize)
+        .map(
+            make_preprocessor(image_shape, roi_splits=1),
+            num_parallel_calls=os.cpu_count(),
+            deterministic=False,
+        )
         .apply(tf.data.experimental.ignore_errors())
     )

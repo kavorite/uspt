@@ -27,14 +27,18 @@ def build_model(image_shape, surrogate=None):
     dummy_input = tf.random.uniform([1, *image_shape])
     if tf.rank(tf.squeeze(surrogate.predict(dummy_input))) != 1:
         # learned, volumetric downsampling
-        x = squeeze_excitation(x, 1)
-        x = tf.keras.layers.SeparableConv2D(x.shape[-1], x.shape[-3:-1], strides=1)(x)
+        # x = squeeze_excitation(x, 1)
+        # x = tf.keras.layers.SeparableConv2D(x.shape[-1], x.shape[-3:-1], strides=1)(x)
+        x = tf.keras.layers.GlobalMaxPooling2D()(x)
     x = tf.keras.layers.Flatten()(x)
-    lns = iter(tf.keras.layers.LayerNormalization() for _ in range(3))
+    lns = iter(tf.keras.layers.LayerNormalization() for _ in range(4))
     hsvds = tf.keras.layers.Dense(3, name="hsv_offset")(next(lns)(x))
     theta = tf.keras.layers.Dense(1, name="rot_factor")(next(lns)(x))
-    delta = tf.keras.layers.Dense(1, name="tsl_offset")(next(lns)(x))
-    output = dict(hsv_offset=hsvds, rot_factor=theta, tsl_offset=delta)
+    delta = tf.keras.layers.Dense(2, name="tsl_offset")(next(lns)(x))
+    alpha = tf.keras.layers.Dense(1, name="scl_factor")(next(lns)(x))
+    output = dict(
+        hsv_offset=hsvds, rot_factor=theta, tsl_offset=delta, scl_factor=alpha
+    )
     return tf.keras.Model(
         surrogate.input, output, name=surrogate.name + "_unsupervised"
     )

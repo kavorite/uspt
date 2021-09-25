@@ -35,7 +35,7 @@ def build_model(image_shape, surrogate=None):
                 x.shape[-3:-1],
                 strides=1,
                 use_bias=False,
-                kernel_initializer="he_normal",
+                kernel_initializer="glorot_normal",
             ),
             lambda x: squeeze_excitation(x, 1),
             tf.keras.layers.Flatten(),

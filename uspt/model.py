@@ -27,20 +27,31 @@ def build_model(image_shape, surrogate=None):
     dummy_input = tf.random.uniform([1, *image_shape])
     if tf.rank(tf.squeeze(surrogate.predict(dummy_input))) != 1:
         # learned, volumetric downsampling
-        x = squeeze_excitation(x, 1)
-        x = tf.keras.layers.SeparableConv2D(
-            1280,
-            x.shape[-3:-1],
-            strides=1,
-            use_bias=False,
-            kernel_initializer="he_normal",
-        )(x)
+        x = tf.keras.layers.LayerNormalization()(x)
+        spatial_embedding = x
+        for layer in (
+            tf.keras.layers.SeparableConv2D(
+                x.shape[-1],
+                x.shape[-3:-1],
+                strides=1,
+                use_bias=False,
+                kernel_initializer="he_normal",
+            ),
+            lambda x: squeeze_excitation(x, 1),
+            tf.keras.layers.Flatten(),
+        ):
+            spatial_embedding = layer(spatial_embedding)
+        x = (
+            spatial_embedding
+            + tf.keras.layers.GlobalAveragePooling2D()(squeeze_excitation(x, 1))
+            + tf.keras.layers.GlobalMaxPooling2D()(squeeze_excitation(x, 1))
+        )
     x = tf.keras.layers.Flatten()(x)
-    lns = iter(tf.keras.layers.LayerNormalization() for _ in range(4))
-    hsvds = tf.keras.layers.Dense(3, name="hsv_offset")(next(lns)(x))
-    theta = tf.keras.layers.Dense(1, name="rot_factor")(next(lns)(x))
-    delta = tf.keras.layers.Dense(2, name="tsl_offset")(next(lns)(x))
-    alpha = tf.keras.layers.Dense(1, name="scl_factor")(next(lns)(x))
+    x = tf.keras.layers.LayerNormalization(name="xfeatures")(x)
+    hsvds = tf.keras.layers.Dense(3, name="hsv_offset")(x)
+    theta = tf.keras.layers.Dense(1, name="rot_factor")(x)
+    delta = tf.keras.layers.Dense(2, name="tsl_offset")(x)
+    alpha = tf.keras.layers.Dense(1, name="scl_factor")(x)
     output = dict(
         hsv_offset=hsvds, rot_factor=theta, tsl_offset=delta, scl_factor=alpha
     )
@@ -50,8 +61,4 @@ def build_model(image_shape, surrogate=None):
 
 
 def model_stem(model):
-    trunc = None
-    for layer in model.layers:
-        if isinstance(layer, tf.keras.layers.Flatten):
-            trunc = layer
-    return trunc
+    return model.get_layer("xfeatures")

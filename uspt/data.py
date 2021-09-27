@@ -3,12 +3,14 @@ import os
 
 import tensorflow as tf
 import tensorflow_addons as tfa
-from tensorflow._api.v2.data import experimental
-from tensorflow.python.data.experimental.ops.error_ops import ignore_errors
 
 
 def make_xform_annotator(
-    hsv_factor=0.05, tls_factor=0.25, rot_factor=0.25, scl_factor=0.25
+    hsv_factor=0.02,
+    rot_factor=0.02,
+    tls_factor=0.10,
+    scl_factor=0.10,
+    include_xforms=True,
 ):
     def xform_and_annotate(x):
         img_size = tf.cast(tf.shape(x)[-3:-1], tf.float32)
@@ -33,13 +35,18 @@ def make_xform_annotator(
             ),
         ]
         xforms = tfa.image.compose_transforms(xforms)
-        x = tfa.image.transform(x, xforms, fill_mode="nearest")
-
-        # summarize our changes for the synthetic objective
-        y = dict(
-            hsv_offset=hsvds, rot_factor=theta, tsl_offset=delta, scl_factor=scl_factor
-        )
-        return x, y
+        x = tfa.image.transform(x, xforms, fill_mode="reflect")
+        if not include_xforms:
+            return x
+        else:
+            # summarize our changes for the synthetic objective
+            y = dict(
+                hsv_offset=hsvds,
+                rot_factor=theta,
+                tsl_offset=delta,
+                scl_factor=scl_factor,
+            )
+            return x, y
 
     return xform_and_annotate
 

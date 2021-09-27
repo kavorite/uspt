@@ -109,7 +109,7 @@ class SimSiam(tf.keras.Model):
         self.projector = projector
         self.predictor = predictor
         self.xformer = xformer if xformer is not None else (lambda x: x)
-        self.loss_tr = tf.keras.metrics.Mean(name="cos_dissimilarity")
+        self.loss_tr = tf.keras.metrics.Mean(name="loss")
         self.build(projector.input.shape)
 
     @staticmethod
@@ -121,7 +121,7 @@ class SimSiam(tf.keras.Model):
         z = tf.stop_gradient(z)
         p = tf.math.l2_normalize(p, axis=-1)
         z = tf.math.l2_normalize(z, axis=-1)
-        return 1 - tf.reduce_mean(tf.reduce_sum(p * z), axis=-1)
+        return 1 - tf.reduce_mean(tf.reduce_sum(p * z, axis=-1), axis=-1)
 
     @property
     def metrics(self):
@@ -146,6 +146,8 @@ class SimSiam(tf.keras.Model):
         train = self.projector.trainable_variables + self.predictor.trainable_variables
         grads = tape.gradient(loss, train)
         self.optimizer.apply_gradients(zip(grads, train))
+        self.loss_tr.update_state(loss)
+        return dict(loss=self.loss_tr.result())
 
     def call(self, image, training=None):
         if training is None:

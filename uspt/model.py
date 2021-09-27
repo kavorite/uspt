@@ -127,6 +127,14 @@ class SimSiam(tf.keras.Model):
     def metrics(self):
         return [self.loss_tr]
 
+    @property
+    def encoder(self):
+        return tf.keras.Model(
+            self.projector.input,
+            self.projector.get_layer("encoding").output,
+            name="uspt_encoder",
+        )
+
     def train_step(self, image):
         x, y = self.xformer(image), self.xformer(image)
         with tf.GradientTape() as tape:

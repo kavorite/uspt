@@ -16,15 +16,19 @@ def se_block(x, channels):
     return tf.keras.layers.Multiply()([x, squeezed])
 
 
-def build_encoder(image_shape, augment_difficulty=0.0):
+def build_augmenter(difficulty=5e-2):
+    layers = [
+        tf.keras.layers.RandomContrast(difficulty),
+        tf.keras.layers.RandomZoom(difficulty, difficulty),
+        tf.keras.layers.RandomFlip("horizontal"),
+    ]
+    return tf.keras.Sequential(layers, name="data_augmentation")
+
+
+def build_encoder(image_shape, augmenter=build_augmenter()):
     inputs = tf.keras.layers.Input(image_shape)
-    if augment_difficulty > 0:
-        for augmentation in (
-            tf.keras.layers.RandomContrast(augment_difficulty),
-            tf.keras.layers.RandomZoom(augment_difficulty, augment_difficulty),
-            tf.keras.layers.RandomFlip("horizontal"),
-        ):
-            inputs = augmentation(inputs)
+    if augmenter is not None:
+        outputs = augmenter(inputs)
     encoder = tf.keras.applications.DenseNet121(
         input_shape=image_shape, weights=None, include_top=False
     )
@@ -65,20 +69,18 @@ def add_xform_heads(encoder):
 
 
 def build_predictor(project_dim, latent_dim, weight_decay):
-    return tf.keras.Sequential(
-        [
-            tf.keras.layers.Input(shape=[project_dim]),
-            tf.keras.layers.Dense(
-                latent_dim,
-                use_bias=False,
-                kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
-            ),
-            tf.keras.layers.Activation(tf.nn.silu),
-            tf.keras.layers.LayerNormalization(),
-            tf.keras.layers.Dense(project_dim),
-        ],
-        name="predictor",
-    )
+    layers = [
+        tf.keras.layers.Input(shape=[project_dim]),
+        tf.keras.layers.Dense(
+            latent_dim,
+            use_bias=False,
+            kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
+        ),
+        tf.keras.layers.Activation(tf.nn.silu),
+        tf.keras.layers.LayerNormalization(),
+        tf.keras.layers.Dense(project_dim),
+    ]
+    return tf.keras.Sequential(layers, name="predictor")
 
 
 class SimSiam(tf.keras.Model):
@@ -88,7 +90,7 @@ class SimSiam(tf.keras.Model):
             build_encoder(image_shape=[512, 512, 3]), project_dim=256
         ),
         predictor=build_predictor(project_dim=256, latent_dim=128, weight_decay=0.0),
-        xformer=make_xform_annotator(include_xforms=False),
+        xformer=None,
     ):
         """
         Constructs a SimSiam (simple siamese) unsupervised training harness.
@@ -118,7 +120,6 @@ class SimSiam(tf.keras.Model):
         Compute stop-gradient Simple Siamese objective between two latent
         representations.
         """
-        z = tf.stop_gradient(z)
         p = tf.math.l2_normalize(p, axis=-1)
         z = tf.math.l2_normalize(z, axis=-1)
         return 1 - tf.reduce_mean(tf.reduce_sum(p * z, axis=-1), axis=-1)
@@ -136,13 +137,14 @@ class SimSiam(tf.keras.Model):
         )
 
     def train_step(self, image):
-        x, y = self.xformer(image), self.xformer(image)
+        if self.xformer is not None:
+            x, y = self.xformer(image), self.xformer(image)
         with tf.GradientTape() as tape:
             p = self.projector(x), self.projector(y)
             z = self.predictor(p[0]), self.predictor(p[1])
             loss = 0.5 * self.cos_dissimilarity(
-                p[0], z[1]
-            ) + 0.5 * self.cos_dissimilarity(p[1], z[0])
+                p[0], tf.stop_gradient(z[1])
+            ) + 0.5 * self.cos_dissimilarity(p[1], tf.stop_gradient(z[0]))
         train = self.projector.trainable_variables + self.predictor.trainable_variables
         grads = tape.gradient(loss, train)
         self.optimizer.apply_gradients(zip(grads, train))

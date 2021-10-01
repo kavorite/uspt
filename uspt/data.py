@@ -7,7 +7,7 @@ import tensorflow_addons as tfa
 
 def make_xform_annotator(
     hsv_factor=0.02,
-    rot_factor=0.02,
+    rot_factor=0.05,
     tls_factor=0.10,
     scl_factor=0.10,
     include_xforms=True,
@@ -36,6 +36,7 @@ def make_xform_annotator(
         ]
         xforms = tfa.image.compose_transforms(xforms)
         x = tfa.image.transform(x, xforms, fill_mode="reflect")
+        x = tf.image.random_flip_left_right(x)
         if not include_xforms:
             return x
         else:

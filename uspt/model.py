@@ -16,7 +16,7 @@ def se_block(x, channels):
     return tf.keras.layers.Multiply()([x, squeezed])
 
 
-def build_augmenter(difficulty=5e-2):
+def build_augmenter(difficulty=0.10):
     layers = [
         tf.keras.layers.RandomContrast(difficulty),
         tf.keras.layers.RandomZoom(difficulty, difficulty),
@@ -46,7 +46,7 @@ def add_projection_head(encoder, project_dim):
     prefix = encoder.name
     projection = encoder.get_layer("encoding").output
     for layer in (
-        tf.keras.layers.LayerNormalization(),
+        tf.keras.layers.BatchNormalization(),
         tf.keras.layers.Dense(project_dim, name="projection"),
         tf.keras.layers.Activation(tf.nn.silu),
     ):
@@ -57,7 +57,7 @@ def add_projection_head(encoder, project_dim):
 def add_xform_heads(encoder):
     x = encoder.output
     x = tf.keras.layers.Flatten()(x)
-    x = tf.keras.layers.LayerNormalization()(x)
+    x = tf.keras.layers.BatchNormalization()(x)
     hsvds = tf.keras.layers.Dense(3, name="hsv_offset")(x)
     theta = tf.keras.layers.Dense(1, name="rot_factor")(x)
     delta = tf.keras.layers.Dense(2, name="tsl_offset")(x)
@@ -77,7 +77,7 @@ def build_predictor(project_dim, latent_dim, weight_decay):
             kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
         ),
         tf.keras.layers.Activation(tf.nn.silu),
-        tf.keras.layers.LayerNormalization(),
+        tf.keras.layers.BatchNormalization(),
         tf.keras.layers.Dense(project_dim),
     ]
     return tf.keras.Sequential(layers, name="predictor")
@@ -87,9 +87,9 @@ class SimSiam(tf.keras.Model):
     def __init__(
         self,
         projector=add_projection_head(
-            build_encoder(image_shape=[512, 512, 3]), project_dim=256
+            build_encoder(image_shape=[224, 224, 3]), project_dim=512
         ),
-        predictor=build_predictor(project_dim=256, latent_dim=128, weight_decay=0.0),
+        predictor=build_predictor(project_dim=512, latent_dim=256, weight_decay=0.0),
         xformer=None,
     ):
         """
@@ -147,7 +147,9 @@ class SimSiam(tf.keras.Model):
             ) + 0.5 * self.cos_dissimilarity(p[1], tf.stop_gradient(z[0]))
         train = self.projector.trainable_variables + self.predictor.trainable_variables
         grads = tape.gradient(loss, train)
-        self.optimizer.apply_gradients(zip(grads, train))
+        self.optimizer.apply_gradients(
+            [(g, v) for g, v in zip(grads, train) if g is not None]
+        )
         self.loss_tr.update_state(loss)
         return dict(loss=self.loss_tr.result())
 

@@ -25,16 +25,18 @@ def build_augmenter(difficulty=0.10):
     return tf.keras.Sequential(layers, name="data_augmentation")
 
 
-def build_encoder(image_shape, augmenter=build_augmenter()):
-    inputs = tf.keras.layers.Input(image_shape)
+def build_encoder(
+    backbone=tf.keras.applications.DenseNet201(
+        input_shape=(224, 224, 3), weights=None, include_top=False
+    ),
+    augmenter=build_augmenter(),
+):
+    inputs = tf.keras.layers.Input(backbone.input.shape[1:])
     if augmenter is not None:
         outputs = augmenter(inputs)
-    encoder = tf.keras.applications.DenseNet121(
-        input_shape=image_shape, weights=None, include_top=False
-    )
-    outputs = encoder(inputs)
-    dummy_input = tf.zeros(encoder.input.shape[1:])[None, ...]
-    dummy_output = encoder(dummy_input, training=False)
+    outputs = backbone(inputs)
+    dummy_input = tf.zeros(inputs.shape[1:])[None, ...]
+    dummy_output = backbone(dummy_input, training=False)
     if tf.rank(tf.squeeze(dummy_output)) != 1:
         avg_pool = tf.keras.layers.GlobalAveragePooling2D()(se_block(outputs, 1))
         max_pool = tf.keras.layers.GlobalMaxPooling2D()(se_block(outputs, 1))
@@ -86,9 +88,7 @@ def build_predictor(project_dim, latent_dim, weight_decay):
 class SimSiam(tf.keras.Model):
     def __init__(
         self,
-        projector=add_projection_head(
-            build_encoder(image_shape=[224, 224, 3]), project_dim=512
-        ),
+        projector=add_projection_head(build_encoder(), project_dim=512),
         predictor=build_predictor(project_dim=512, latent_dim=256, weight_decay=0.0),
         xformer=None,
     ):

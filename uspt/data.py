@@ -156,8 +156,9 @@ def supervised_dataset(
         read_records(shards, deserialize)
         .map(
             make_preprocessor(image_shape, roi_splits=1),
-            num_parallel_calls=os.cpu_count(),
+            num_parallel_calls=tf.data.AUTOTUNE,
             deterministic=False,
         )
+        .shuffle(256)
         .apply(tf.data.experimental.ignore_errors())
     )

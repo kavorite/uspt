@@ -35,7 +35,7 @@ def build_encoder(
     if augmenter is not None:
         outputs = augmenter(inputs)
     outputs = backbone(inputs)
-    outputs = tf.keras.layers.GlobalMaxPooling2D(name="encoding")(outputs)
+    outputs = tf.keras.layers.GlobalMaxPooling2D(name="encoding")(se_block(outputs, 1))
     return tf.keras.Model(inputs, outputs, name="uspt_encoder")
 
 
@@ -69,13 +69,13 @@ def build_predictor(project_dim, latent_dim, weight_decay=0.5, dropout=0.0):
     layers = [
         tf.keras.layers.Input(shape=[project_dim]),
         tf.keras.layers.Dropout(dropout),
+        tf.keras.layers.BatchNormalization(),
         tf.keras.layers.Dense(
             latent_dim,
             use_bias=False,
             kernel_regularizer=tf.keras.regularizers.l2(weight_decay),
         ),
         tf.keras.layers.Activation(tf.nn.silu),
-        tf.keras.layers.BatchNormalization(),
         tf.keras.layers.Dense(project_dim),
     ]
     return tf.keras.Sequential(layers, name="predictor")

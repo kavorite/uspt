@@ -183,23 +183,28 @@ class MoCoV2(SimSiam):
         # truncate old keys
         self.kdict.assign(self.kdict[tf.shape(keys)[0] :, ...])
         # append new keys
-        self.kdict.assign(tf.concat([self.kdict, keys], axis=0))
+        self.kdict.assign(
+            tf.math.l2_normalize(tf.concat([self.kdict, keys], axis=0), axis=-1)
+        )
 
     def contrastive_loss(self, u, v):
         q = tf.math.l2_normalize(self.projector_q(u), axis=-1)
         k = tf.math.l2_normalize(self.projector_k(v), axis=-1)
+        batch_size = tf.shape(q)[0]
         pos_logits = q @ tf.transpose(k)
         neg_logits = q @ tf.transpose(self.kdict)
         logits = tf.concat([pos_logits, neg_logits], axis=-1)
         logits = logits * (1 / self.tau)
-        labels = tf.zeros(tf.shape(logits)[0], dtype=tf.int64)
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels, logits)
+        labels = tf.zeros(batch_size, dtype=tf.int64)
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels, logits) / tf.cast(
+            batch_size, dtype=tf.float32
+        )
         return loss, q, k
 
     def symmetric_contrastive_loss(self, u, v):
         l_uv, q_uv, k_uv = self.contrastive_loss(u, v)
         l_vu, q_vu, k_vu = self.contrastive_loss(v, u)
-        loss = l_uv + l_vu
+        loss = tf.reduce_mean(l_uv + l_vu)
         qrys = tf.concat([q_uv, q_vu], axis=0)
         keys = tf.concat([k_uv, k_vu], axis=0)
         return loss, qrys, keys

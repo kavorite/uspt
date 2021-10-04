@@ -35,12 +35,10 @@ def build_encoder(
     if augmenter is not None:
         outputs = augmenter(inputs)
     outputs = backbone(inputs)
-    dummy_input = tf.zeros(inputs.shape[1:])[None, ...]
-    dummy_output = backbone(dummy_input, training=False)
-    if tf.rank(tf.squeeze(dummy_output)) != 1:
-        avg_pool = tf.keras.layers.GlobalAveragePooling2D()(se_block(outputs, 1))
-        max_pool = tf.keras.layers.GlobalMaxPooling2D()(se_block(outputs, 1))
-        outputs = tf.keras.layers.Multiply(name="encoding")([avg_pool, max_pool])
+    avg_pool = tf.keras.layers.GlobalAveragePooling2D()(se_block(outputs, 1))
+    max_pool = tf.keras.layers.GlobalMaxPooling2D()(se_block(outputs, 1))
+    outputs = tf.keras.layers.Multiply()([avg_pool, max_pool])
+    outputs = tf.keras.layers.BatchNormalization(name="encoding")(outputs)
     return tf.keras.Model(inputs, outputs, name="uspt_encoder")
 
 
@@ -70,7 +68,7 @@ def add_xform_heads(encoder):
     return tf.keras.Model(encoder.input, output, name=encoder.name + "_uspt_xform")
 
 
-def build_predictor(project_dim, latent_dim, weight_decay=0.0):
+def build_predictor(project_dim, latent_dim, weight_decay=0.5):
     layers = [
         tf.keras.layers.Input(shape=[project_dim]),
         tf.keras.layers.Dense(

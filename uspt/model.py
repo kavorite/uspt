@@ -65,11 +65,11 @@ def add_xform_heads(encoder):
     return tf.keras.Model(encoder.input, output, name=encoder.name + "_uspt_xform")
 
 
-def build_predictor(project_dim, latent_dim, weight_decay=0.5, dropout=0.0):
+def build_predictor(project_dim, latent_dim, weight_decay=0.0, dropout=0.0):
     layers = [
         tf.keras.layers.Input(shape=[project_dim]),
-        tf.keras.layers.Dropout(dropout),
         tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dropout(dropout),
         tf.keras.layers.Dense(
             latent_dim,
             use_bias=False,
@@ -84,8 +84,8 @@ def build_predictor(project_dim, latent_dim, weight_decay=0.5, dropout=0.0):
 class SimSiam(tf.keras.Model):
     def __init__(
         self,
-        projector=add_projection_head(build_encoder(), project_dim=512),
-        predictor=build_predictor(project_dim=512, latent_dim=256),
+        projector=add_projection_head(build_encoder(), project_dim=2048),
+        predictor=build_predictor(project_dim=2048, latent_dim=512),
         xformer=None,
     ):
         """
@@ -188,7 +188,8 @@ class MoCoV2(SimSiam):
         )
 
     def contrastive_loss(self, u, v):
-        q = tf.math.l2_normalize(self.projector_q(u), axis=-1)
+        q = self.predictor(self.projector_q(u))
+        q = tf.math.l2_normalize(tf.stop_gradient(q), axis=-1)
         k = tf.math.l2_normalize(self.projector_k(v), axis=-1)
         batch_size = tf.shape(q)[0]
         pos_logits = q @ tf.transpose(k)

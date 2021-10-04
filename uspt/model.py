@@ -1,7 +1,5 @@
 import tensorflow as tf
 
-from .data import make_xform_annotator
-
 
 def se_block(x, channels):
     squeezed = x
@@ -26,7 +24,7 @@ def build_augmenter(difficulty=0.10):
 
 
 def build_encoder(
-    backbone=tf.keras.applications.DenseNet201(
+    backbone=tf.keras.applications.Xception(
         input_shape=(224, 224, 3), weights=None, include_top=False
     ),
     augmenter=build_augmenter(),
@@ -35,7 +33,9 @@ def build_encoder(
     if augmenter is not None:
         outputs = augmenter(inputs)
     outputs = backbone(inputs)
-    outputs = tf.keras.layers.GlobalMaxPooling2D(name="encoding")(se_block(outputs, 1))
+    max_pool = tf.keras.layers.GlobalMaxPool2D()(se_block(outputs, 1))
+    avg_pool = tf.keras.layers.GlobalAvgPool2D()(se_block(outputs, 1))
+    outputs = tf.keras.layers.Add(name="encoding")([max_pool, avg_pool])
     return tf.keras.Model(inputs, outputs, name="uspt_encoder")
 
 
@@ -132,11 +132,16 @@ class SimSiam(tf.keras.Model):
             name="uspt_encoder",
         )
 
-    def train_step(self, image):
+    def augmented_pairs(self, x):
         if self.xformer is not None:
-            x, y = self.xformer(image), self.xformer(image)
+            u, v = self.xformer(x), self.xformer(x)
+            return u, v
+        else:
+            return x, x
+
+    def train_step(self, data):
         with tf.GradientTape() as tape:
-            p = self.projector(x), self.projector(y)
+            p = self.augmented_pairs(data)
             z = self.predictor(p[0]), self.predictor(p[1])
             loss = 0.5 * self.cos_dissimilarity(
                 p[0], tf.stop_gradient(z[1])
@@ -153,3 +158,64 @@ class SimSiam(tf.keras.Model):
         if training is None:
             training = tf.keras.backend.learning_phase()
         return self.projector(image, training=training)
+
+
+class MoCoV2(SimSiam):
+    def __init__(self, momentum=1 - 1e-3, temperature=7e-2, max_keys=1024, **kwargs):
+        super().__init__(**kwargs)
+        projector = self.projector
+        kdict_init = tf.random.normal([max_keys, self.projector.output.shape[-1]])
+        self.kdict = tf.Variable(initial_value=kdict_init)
+        self.projector_q = projector
+        self.projector_k = tf.keras.models.clone_model(projector)
+        self.projector_k.set_weights(projector.get_weights())
+        self.rho = momentum
+        self.tau = temperature
+
+    def update_key_encoder(self):
+        rho = self.rho
+        w_q = self.projector_q.trainable_variables
+        w_k = self.projector_k.trainable_variables
+        for u, v in zip(w_k, w_q):
+            u.assign(u * rho + v * (1 - rho))
+
+    def update_key_dictionary(self, keys):
+        # truncate old keys
+        self.kdict.assign(self.kdict[tf.shape(keys)[0] :, ...])
+        # append new keys
+        self.kdict.assign(tf.concat([self.kdict, keys], axis=0))
+
+    def contrastive_loss(self, u, v):
+        q = tf.math.l2_normalize(self.projector_q(u), axis=-1)
+        k = tf.math.l2_normalize(self.projector_k(v), axis=-1)
+        pos_logits = q @ tf.transpose(k)
+        neg_logits = q @ tf.transpose(self.kdict)
+        logits = tf.concat([pos_logits, neg_logits], axis=-1)
+        logits = logits * (1 / self.tau)
+        labels = tf.zeros(tf.shape(logits)[0], dtype=tf.int64)
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels, logits)
+        return loss, q, k
+
+    def symmetric_contrastive_loss(self, u, v):
+        l_uv, q_uv, k_uv = self.contrastive_loss(u, v)
+        l_vu, q_vu, k_vu = self.contrastive_loss(v, u)
+        loss = l_uv + l_vu
+        qrys = tf.concat([q_uv, q_vu], axis=0)
+        keys = tf.concat([k_uv, k_vu], axis=0)
+        return loss, qrys, keys
+
+    def train_step(self, data):
+        # https://github.com/facebookresearch/moco/blob/main/moco/builder.py
+        u, v = self.augmented_pairs(data)
+        with tf.GradientTape() as tape:
+            loss, qrys, keys = self.symmetric_contrastive_loss(u, v)
+            tf.stop_gradient(keys)
+        self.update_key_dictionary(keys)
+        train = self.projector_q.trainable_variables
+        grads = tape.gradient(loss, train)
+        self.optimizer.apply_gradients(
+            [(g, v) for g, v in zip(grads, train) if g is not None]
+        )
+        self.update_key_encoder()
+        self.loss_tr.update_state(loss)
+        return dict(loss=self.loss_tr.result())

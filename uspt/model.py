@@ -66,9 +66,10 @@ def add_xform_heads(encoder):
     return tf.keras.Model(encoder.input, output, name=encoder.name + "_uspt_xform")
 
 
-def build_predictor(project_dim, latent_dim, weight_decay=0.5):
+def build_predictor(project_dim, latent_dim, weight_decay=0.5, dropout=0.0):
     layers = [
         tf.keras.layers.Input(shape=[project_dim]),
+        tf.keras.layers.Dropout(dropout),
         tf.keras.layers.Dense(
             latent_dim,
             use_bias=False,
@@ -85,7 +86,7 @@ class SimSiam(tf.keras.Model):
     def __init__(
         self,
         projector=add_projection_head(build_encoder(), project_dim=512),
-        predictor=build_predictor(project_dim=512, latent_dim=256, weight_decay=0.0),
+        predictor=build_predictor(project_dim=512, latent_dim=256),
         xformer=None,
     ):
         """

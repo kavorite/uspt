@@ -40,7 +40,7 @@ def build_encoder(
     if tf.rank(tf.squeeze(dummy_output)) != 1:
         avg_pool = tf.keras.layers.GlobalAveragePooling2D()(se_block(outputs, 1))
         max_pool = tf.keras.layers.GlobalMaxPooling2D()(se_block(outputs, 1))
-        outputs = tf.keras.layers.Add(name="encoding")([avg_pool, max_pool])
+        outputs = tf.keras.layers.Multiply(name="encoding")([avg_pool, max_pool])
     return tf.keras.Model(inputs, outputs, name="uspt_encoder")
 
 

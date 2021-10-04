@@ -35,8 +35,7 @@ def build_encoder(
     if augmenter is not None:
         outputs = augmenter(inputs)
     outputs = backbone(inputs)
-    outputs = tf.keras.layers.GlobalMaxPooling2D()(se_block(outputs, 1))
-    outputs = tf.keras.layers.BatchNormalization(name="encoding")(outputs)
+    outputs = tf.keras.layers.GlobalMaxPooling2D(name="encoding")(outputs)
     return tf.keras.Model(inputs, outputs, name="uspt_encoder")
 
 

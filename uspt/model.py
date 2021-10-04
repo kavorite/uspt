@@ -132,16 +132,13 @@ class SimSiam(tf.keras.Model):
             name="uspt_encoder",
         )
 
-    def augmented_pairs(self, x):
-        if self.xformer is not None:
-            u, v = self.xformer(x), self.xformer(x)
-            return u, v
-        else:
-            return x, x
+    def augmented_pair(self, x):
+        u, v = self.xformer(x), self.xformer(x)
+        return u, v
 
     def train_step(self, data):
         with tf.GradientTape() as tape:
-            p = self.augmented_pairs(data)
+            p = self.augmented_pair(data)
             z = self.predictor(p[0]), self.predictor(p[1])
             loss = 0.5 * self.cos_dissimilarity(
                 p[0], tf.stop_gradient(z[1])
@@ -212,12 +209,14 @@ class MoCoV2(SimSiam):
 
     def train_step(self, data):
         # https://github.com/facebookresearch/moco/blob/main/moco/builder.py
-        u, v = self.augmented_pairs(data)
+        u, v = self.augmented_pair(data)
         with tf.GradientTape() as tape:
             loss, qrys, keys = self.symmetric_contrastive_loss(u, v)
             tf.stop_gradient(keys)
         self.update_key_dictionary(keys)
-        train = self.projector_q.trainable_variables
+        train = (
+            self.projector_q.trainable_variables + self.predictor.trainable_variables
+        )
         grads = tape.gradient(loss, train)
         self.optimizer.apply_gradients(
             [(g, v) for g, v in zip(grads, train) if g is not None]

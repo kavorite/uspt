@@ -159,6 +159,5 @@ def supervised_dataset(
             num_parallel_calls=tf.data.AUTOTUNE,
             deterministic=False,
         )
-        .shuffle(256)
         .apply(tf.data.experimental.ignore_errors())
     )

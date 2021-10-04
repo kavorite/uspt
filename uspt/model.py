@@ -70,7 +70,7 @@ def add_xform_heads(encoder):
     return tf.keras.Model(encoder.input, output, name=encoder.name + "_uspt_xform")
 
 
-def build_predictor(project_dim, latent_dim, weight_decay):
+def build_predictor(project_dim, latent_dim, weight_decay=0.0):
     layers = [
         tf.keras.layers.Input(shape=[project_dim]),
         tf.keras.layers.Dense(

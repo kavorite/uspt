@@ -24,13 +24,15 @@ def build_encoder(
             tf.keras.layers.RandomTranslation(0.1, 0.1),
             tf.keras.layers.RandomContrast(0.05),
             tf.keras.layers.RandomRotation(0.05),
-        ]
+        ],
+        name="data_augmentation",
     ),
 ):
     inputs = tf.keras.layers.Input(backbone.input.shape[1:])
+    outputs = inputs
     if augmenter is not None:
-        outputs = augmenter(inputs)
-    outputs = backbone(inputs)
+        outputs = augmenter(outputs)
+    outputs = backbone(outputs)
     max_pool = tf.keras.layers.GlobalMaxPool2D()(se_block(outputs, 1))
     avg_pool = tf.keras.layers.GlobalAvgPool2D()(se_block(outputs, 1))
     outputs = tf.keras.layers.Add(name="encoding")([max_pool, avg_pool])
@@ -108,16 +110,6 @@ class SimSiam(tf.keras.Model):
         self.loss_tr = tf.keras.metrics.Mean(name="loss")
         self.build(projector.input.shape)
 
-    @staticmethod
-    def cos_dissimilarity(p, z):
-        """
-        Compute stop-gradient Simple Siamese objective between two latent
-        representations.
-        """
-        p = tf.math.l2_normalize(p, axis=-1)
-        z = tf.math.l2_normalize(z, axis=-1)
-        return 1 - tf.reduce_mean(tf.reduce_sum(p * z, axis=-1), axis=-1)
-
     @property
     def metrics(self):
         return [self.loss_tr]
@@ -135,23 +127,21 @@ class SimSiam(tf.keras.Model):
         return u, v
 
     def train_step(self, data):
-        u, v = self.augmented_pair(data)
-        x = tf.concat([u, v], axis=0)
+        s, t = self.augmented_pair(data)
+        x = tf.concat([s, t], axis=0)
         with tf.GradientTape() as tape:
-            p = tf.split(self.projector(x), 2, axis=0)
-            z = (
-                tf.stop_gradient(self.predictor(p[0])),
-                tf.stop_gradient(self.predictor(p[1])),
-            )
-            u_loss = self.cos_dissimilarity(p[0], z[1])
-            v_loss = self.cos_dissimilarity(z[1], p[0])
-            loss = (u_loss + v_loss) * 0.5
+            p = tf.math.l2_normalize(self.projector(x), axis=-1)
+            z = tf.math.l2_normalize(self.predictor(p), axis=-1)
+            q, r = tf.split(p, 2, axis=0)
+            u, v = tf.split(z, 2, axis=0)
+            coses = 0.5 * (q @ tf.transpose(v) + r @ tf.transpose(u))
+            error = 1 - tf.reduce_mean(coses)
         train = self.projector.trainable_variables + self.predictor.trainable_variables
-        grads = tape.gradient(loss, train)
+        grads = tape.gradient(error, train)
         self.optimizer.apply_gradients(
             [(g, v) for g, v in zip(grads, train) if g is not None]
         )
-        self.loss_tr.update_state(loss)
+        self.loss_tr.update_state(error)
         return dict(loss=self.loss_tr.result())
 
     def call(self, image, training=None):

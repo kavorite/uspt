@@ -137,12 +137,17 @@ class SimSiam(tf.keras.Model):
         return u, v
 
     def train_step(self, data):
+        u, v = self.augmented_pair(data)
+        x = tf.concat([u, v], axis=0)
         with tf.GradientTape() as tape:
-            p = self.encoder(tf.stack(self.augmented_pair(data)))
-            z = self.predictor(p[0]), self.predictor(p[1])
-            loss = 0.5 * self.cos_dissimilarity(
-                p[0], tf.stop_gradient(z[1])
-            ) + 0.5 * self.cos_dissimilarity(p[1], tf.stop_gradient(z[0]))
+            p = tf.split(self.projector(x), 2, axis=0)
+            z = (
+                tf.stop_gradient(self.predictor(p[0])),
+                tf.stop_gradient(self.predictor(p[1])),
+            )
+            u_loss = self.cos_dissimilarity(p[0], z[1])
+            v_loss = self.cos_dissimilarity(z[1], p[0])
+            loss = (u_loss + v_loss) * 0.5
         train = self.projector.trainable_variables + self.predictor.trainable_variables
         grads = tape.gradient(loss, train)
         self.optimizer.apply_gradients(

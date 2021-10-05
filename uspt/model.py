@@ -14,20 +14,18 @@ def se_block(x, channels):
     return tf.keras.layers.Multiply()([x, squeezed])
 
 
-def build_augmenter(difficulty=0.10):
-    layers = [
-        tf.keras.layers.RandomContrast(difficulty),
-        tf.keras.layers.RandomZoom(difficulty, difficulty),
-        tf.keras.layers.RandomFlip("horizontal"),
-    ]
-    return tf.keras.Sequential(layers, name="data_augmentation")
-
-
 def build_encoder(
     backbone=tf.keras.applications.Xception(
         input_shape=(224, 224, 3), weights=None, include_top=False
     ),
-    augmenter=build_augmenter(),
+    augmenter=tf.keras.Sequential(
+        [
+            tf.keras.layers.RandomFlip("horizontal"),
+            tf.keras.layers.RandomTranslation(0.1, 0.1),
+            tf.keras.layers.RandomContrast(0.05),
+            tf.keras.layers.RandomRotation(0.05),
+        ]
+    ),
 ):
     inputs = tf.keras.layers.Input(backbone.input.shape[1:])
     if augmenter is not None:

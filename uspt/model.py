@@ -194,8 +194,8 @@ class MoCoV2(SimSiam):
         logits = tf.concat([pos_logits, neg_logits], axis=-1)
         logits = logits * (1 / self.tau)
         labels = tf.zeros(batch_size, dtype=tf.int64)
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels, logits) / tf.cast(
-            batch_size, dtype=tf.float32
+        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels, logits) * (
+            1 / tf.cast(batch_size, tf.float32)
         )
         return loss, q, k
 

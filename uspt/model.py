@@ -138,7 +138,7 @@ class SimSiam(tf.keras.Model):
 
     def train_step(self, data):
         with tf.GradientTape() as tape:
-            p = self.augmented_pair(data)
+            p = self.encoder(tf.stack(self.augmented_pair(data)))
             z = self.predictor(p[0]), self.predictor(p[1])
             loss = 0.5 * self.cos_dissimilarity(
                 p[0], tf.stop_gradient(z[1])

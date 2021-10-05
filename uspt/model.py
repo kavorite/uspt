@@ -168,7 +168,6 @@ class MoCoV2(SimSiam):
         self.projector_k.set_weights(projector.get_weights())
         self.rho = momentum
         self.tau = temperature
-        delattr(self, "predictor")
 
     def update_key_encoder(self):
         rho = self.rho
@@ -186,7 +185,8 @@ class MoCoV2(SimSiam):
         )
 
     def contrastive_loss(self, u, v):
-        q = tf.math.l2_normalize(self.projector_q(u), axis=-1)
+        q = self.predictor(self.projector_q(u))
+        q = tf.math.l2_normalize(tf.stop_gradient(q), axis=-1)
         k = tf.math.l2_normalize(self.projector_k(v), axis=-1)
         batch_size = tf.shape(q)[0]
         pos_logits = q @ tf.transpose(k)
@@ -214,7 +214,9 @@ class MoCoV2(SimSiam):
             loss, qrys, keys = self.symmetric_contrastive_loss(u, v)
             tf.stop_gradient(keys)
         self.update_key_dictionary(keys)
-        train = self.projector_q.trainable_variables
+        train = (
+            self.projector_q.trainable_variables + self.predictor.trainable_variables
+        )
         grads = tape.gradient(loss, train)
         self.optimizer.apply_gradients(
             [(g, v) for g, v in zip(grads, train) if g is not None]

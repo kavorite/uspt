@@ -158,7 +158,7 @@ class SimSiam(tf.keras.Model):
 
 
 class MoCoV2(SimSiam):
-    def __init__(self, momentum=1 - 1e-3, temperature=7e-2, max_keys=1024, **kwargs):
+    def __init__(self, momentum=1 - 1e-3, temperature=7e-2, max_keys=65536, **kwargs):
         super().__init__(**kwargs)
         projector = self.projector
         kdict_init = tf.random.normal([max_keys, self.projector.output.shape[-1]])
@@ -189,7 +189,7 @@ class MoCoV2(SimSiam):
         q = tf.math.l2_normalize(tf.stop_gradient(q), axis=-1)
         k = tf.math.l2_normalize(self.projector_k(v), axis=-1)
         batch_size = tf.shape(q)[0]
-        pos_logits = q @ tf.transpose(k)
+        pos_logits = q @ tf.transpose(tf.stop_gradient(k))
         neg_logits = q @ tf.transpose(self.kdict)
         logits = tf.concat([pos_logits, neg_logits], axis=-1)
         logits = logits * (1 / self.tau)

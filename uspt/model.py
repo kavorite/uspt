@@ -130,8 +130,8 @@ class SimSiam(tf.keras.Model):
         s, t = self.augmented_pair(data)
         x = tf.concat([s, t], axis=0)
         with tf.GradientTape() as tape:
-            p = tf.math.l2_normalize(self.projector(x), axis=-1)
-            z = tf.math.l2_normalize(self.predictor(p), axis=-1)
+            p = tf.math.l2_normalize(self.projector(x), axis=-1, epsilon=1e-9)
+            z = tf.math.l2_normalize(self.predictor(p), axis=-1, epsilon=1e-9)
             q, r = tf.split(p, 2, axis=0)
             u, v = tf.split(z, 2, axis=0)
             coses = 0.5 * (q @ tf.transpose(v) + r @ tf.transpose(u))
@@ -170,20 +170,18 @@ class MoCoV2(SimSiam):
             u.assign(u * rho + v * (1 - rho))
 
     def update_key_dictionary(self, keys):
-        # truncate old keys
-        self.kdict.assign(self.kdict[tf.shape(keys)[0] :, ...])
-        # append new keys
-        self.kdict.assign(
-            tf.math.l2_normalize(tf.concat([self.kdict, keys], axis=0), axis=-1)
-        )
+        trunc = tf.shape(keys)[0]
+        kdict = self.kdict[trunc:, ...]
+        nkeys = tf.math.l2_normalize(keys, axis=-1, epsilon=1e-9)
+        self.kdict.assign(tf.concat([kdict, nkeys], axis=0))
 
     def contrastive_loss(self, u, v):
         q = self.predictor(self.projector_q(u))
-        q = tf.math.l2_normalize(q, axis=-1)
-        k = tf.math.l2_normalize(self.projector_k(v), axis=-1)
+        q = tf.math.l2_normalize(q, axis=-1, epsilon=1e-9)
+        k = tf.math.l2_normalize(self.projector_k(v), axis=-1, epsilon=1e-9)
         batch_size = tf.shape(q)[0]
-        pos_logits = q @ tf.transpose(k)
-        neg_logits = q @ tf.transpose(self.kdict)
+        pos_logits = q @ tf.transpose(tf.stop_gradient(k))
+        neg_logits = q @ tf.transpose(tf.stop_gradient(self.kdict))
         logits = tf.concat([pos_logits, neg_logits], axis=-1)
         logits = logits * (1 / self.tau)
         labels = tf.zeros(batch_size, dtype=tf.int64)
@@ -205,7 +203,6 @@ class MoCoV2(SimSiam):
         u, v = self.augmented_pair(data)
         with tf.GradientTape() as tape:
             loss, qrys, keys = self.symmetric_contrastive_loss(u, v)
-            tf.stop_gradient(keys)
         self.update_key_dictionary(keys)
         train = (
             self.projector_q.trainable_variables + self.predictor.trainable_variables

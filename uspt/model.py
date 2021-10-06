@@ -105,6 +105,11 @@ class SimSiam(tf.keras.Model):
         """
         super().__init__(self)
         self.projector = projector
+        self.encoder = tf.keras.Model(
+            projector.input,
+            projector.get_layer("encoding").output,
+            name="uspt_encoder",
+        )
         self.predictor = predictor
         self.xformer = xformer if xformer is not None else (lambda x: x)
         self.loss_tr = tf.keras.metrics.Mean(name="loss")
@@ -113,14 +118,6 @@ class SimSiam(tf.keras.Model):
     @property
     def metrics(self):
         return [self.loss_tr]
-
-    @property
-    def encoder(self):
-        return tf.keras.Model(
-            self.projector.input,
-            self.projector.get_layer("encoding").output,
-            name="uspt_encoder",
-        )
 
     def augmented_pair(self, x):
         u, v = self.xformer(x), self.xformer(x)
@@ -172,21 +169,23 @@ class MoCoV2(SimSiam):
     def update_key_dictionary(self, keys):
         trunc = tf.shape(keys)[0]
         kdict = self.kdict[trunc:, ...]
-        nkeys = tf.math.l2_normalize(keys, axis=-1, epsilon=1e-9)
+        nkeys = tf.math.l2_normalize(keys, axis=-1)
         self.kdict.assign(tf.concat([kdict, nkeys], axis=0))
 
     def contrastive_loss(self, u, v):
         q = self.predictor(self.projector_q(u))
-        q = tf.math.l2_normalize(q, axis=-1, epsilon=1e-9)
-        k = tf.math.l2_normalize(self.projector_k(v), axis=-1, epsilon=1e-9)
+        q = tf.math.l2_normalize(q, axis=-1)
+        k = tf.math.l2_normalize(self.projector_k(v), axis=-1)
         batch_size = tf.shape(q)[0]
         pos_logits = q @ tf.transpose(tf.stop_gradient(k))
         neg_logits = q @ tf.transpose(tf.stop_gradient(self.kdict))
-        logits = tf.concat([pos_logits, neg_logits], axis=-1)
-        logits = logits * (1 / self.tau)
+        logits = tf.math.divide_no_nan(
+            tf.concat([pos_logits, neg_logits], axis=-1), self.tau
+        )
         labels = tf.zeros(batch_size, dtype=tf.int64)
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels, logits) * (
-            1 / tf.cast(batch_size, tf.float32)
+        loss = tf.math.divide_no_nan(
+            tf.nn.sparse_softmax_cross_entropy_with_logits(labels, logits),
+            tf.cast(batch_size, tf.float32),
         )
         return loss, q, k
 

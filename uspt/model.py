@@ -179,10 +179,10 @@ class MoCoV2(SimSiam):
 
     def contrastive_loss(self, u, v):
         q = self.predictor(self.projector_q(u))
-        q = tf.math.l2_normalize(tf.stop_gradient(q), axis=-1)
+        q = tf.math.l2_normalize(q, axis=-1)
         k = tf.math.l2_normalize(self.projector_k(v), axis=-1)
         batch_size = tf.shape(q)[0]
-        pos_logits = q @ tf.transpose(tf.stop_gradient(k))
+        pos_logits = q @ tf.transpose(k)
         neg_logits = q @ tf.transpose(self.kdict)
         logits = tf.concat([pos_logits, neg_logits], axis=-1)
         logits = logits * (1 / self.tau)

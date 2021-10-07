@@ -148,10 +148,12 @@ class SimSiam(tf.keras.Model):
 
 
 class MoCoV2(SimSiam):
-    def __init__(self, momentum=1 - 1e-3, temperature=7e-2, max_keys=65536, **kwargs):
+    def __init__(self, momentum=1 - 1e-3, temperature=7e-2, max_keys=1024, **kwargs):
         super().__init__(**kwargs)
         projector = self.projector
-        kdict_init = tf.random.normal([max_keys, self.projector.output.shape[-1]])
+        kdict_init = tf.math.l2_normalize(
+            tf.random.normal([max_keys, self.projector.output.shape[-1]]), axis=0
+        )
         self.kdict = tf.Variable(initial_value=kdict_init)
         self.projector_q = projector
         self.projector_k = tf.keras.models.clone_model(projector)

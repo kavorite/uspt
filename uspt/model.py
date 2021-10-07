@@ -177,8 +177,8 @@ class MoCoV2(SimSiam):
         q = tf.math.l2_normalize(q, axis=-1)
         k = tf.math.l2_normalize(self.projector_k(v), axis=-1)
         batch_size = tf.shape(q)[0]
-        pos_logits = q @ tf.transpose(tf.stop_gradient(k))
-        neg_logits = q @ tf.transpose(tf.stop_gradient(self.kdict))
+        pos_logits = q @ tf.transpose(k)
+        neg_logits = q @ tf.transpose(self.kdict)
         logits = tf.math.divide_no_nan(
             tf.concat([pos_logits, neg_logits], axis=-1), self.tau
         )
@@ -202,6 +202,7 @@ class MoCoV2(SimSiam):
         u, v = self.augmented_pair(data)
         with tf.GradientTape() as tape:
             loss, qrys, keys = self.symmetric_contrastive_loss(u, v)
+            tf.stop_gradient(keys)
         self.update_key_dictionary(keys)
         train = (
             self.projector_q.trainable_variables + self.predictor.trainable_variables

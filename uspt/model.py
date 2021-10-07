@@ -214,7 +214,9 @@ class MoCoV2(SimSiam):
             loss, qrys, keys = self.symmetric_contrastive_loss(u, v)
             tf.stop_gradient(keys)
         self.update_key_dictionary(keys)
-        train = self.projector_q.trainable_variables
+        train = (
+            self.projector_q.trainable_variables + self.predictor.trainable_variables
+        )
         grads = tape.gradient(loss, train)
         self.optimizer.apply_gradients(
             [(g, v) for g, v in zip(grads, train) if g is not None]

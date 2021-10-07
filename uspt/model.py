@@ -14,25 +14,25 @@ def se_block(x, channels):
     return tf.keras.layers.Multiply()([x, squeezed])
 
 
-def build_augmenter(difficulty=0.10):
-    layers = [
-        tf.keras.layers.RandomContrast(difficulty),
-        tf.keras.layers.RandomZoom(difficulty, difficulty),
-        tf.keras.layers.RandomFlip("horizontal"),
-    ]
-    return tf.keras.Sequential(layers, name="data_augmentation")
-
-
 def build_encoder(
     backbone=tf.keras.applications.Xception(
         input_shape=(224, 224, 3), weights=None, include_top=False
     ),
-    augmenter=build_augmenter(),
+    augmenter=tf.keras.Sequential(
+        [
+            tf.keras.layers.RandomFlip("horizontal"),
+            tf.keras.layers.RandomTranslation(0.1, 0.1),
+            tf.keras.layers.RandomContrast(0.05),
+            tf.keras.layers.RandomRotation(0.05),
+        ],
+        name="data_augmentation",
+    ),
 ):
     inputs = tf.keras.layers.Input(backbone.input.shape[1:])
+    outputs = inputs
     if augmenter is not None:
-        outputs = augmenter(inputs)
-    outputs = backbone(inputs)
+        outputs = augmenter(outputs)
+    outputs = backbone(outputs)
     max_pool = tf.keras.layers.GlobalMaxPool2D()(se_block(outputs, 1))
     avg_pool = tf.keras.layers.GlobalAvgPool2D()(se_block(outputs, 1))
     outputs = tf.keras.layers.Add(name="encoding")([max_pool, avg_pool])
@@ -105,50 +105,40 @@ class SimSiam(tf.keras.Model):
         """
         super().__init__(self)
         self.projector = projector
+        self.encoder = tf.keras.Model(
+            projector.input,
+            projector.get_layer("encoding").output,
+            name="uspt_encoder",
+        )
         self.predictor = predictor
         self.xformer = xformer if xformer is not None else (lambda x: x)
         self.loss_tr = tf.keras.metrics.Mean(name="loss")
         self.build(projector.input.shape)
 
-    @staticmethod
-    def cos_dissimilarity(p, z):
-        """
-        Compute stop-gradient Simple Siamese objective between two latent
-        representations.
-        """
-        p = tf.math.l2_normalize(p, axis=-1)
-        z = tf.math.l2_normalize(z, axis=-1)
-        return 1 - tf.reduce_mean(tf.reduce_sum(p * z, axis=-1), axis=-1)
-
     @property
     def metrics(self):
         return [self.loss_tr]
-
-    @property
-    def encoder(self):
-        return tf.keras.Model(
-            self.projector.input,
-            self.projector.get_layer("encoding").output,
-            name="uspt_encoder",
-        )
 
     def augmented_pair(self, x):
         u, v = self.xformer(x), self.xformer(x)
         return u, v
 
     def train_step(self, data):
+        s, t = self.augmented_pair(data)
+        x = tf.concat([s, t], axis=0)
         with tf.GradientTape() as tape:
-            p = self.augmented_pair(data)
-            z = self.predictor(p[0]), self.predictor(p[1])
-            loss = 0.5 * self.cos_dissimilarity(
-                p[0], tf.stop_gradient(z[1])
-            ) + 0.5 * self.cos_dissimilarity(p[1], tf.stop_gradient(z[0]))
+            p = tf.math.l2_normalize(self.projector(x), axis=-1, epsilon=1e-9)
+            z = tf.math.l2_normalize(self.predictor(p), axis=-1, epsilon=1e-9)
+            q, r = tf.split(p, 2, axis=0)
+            u, v = tf.split(z, 2, axis=0)
+            coses = 0.5 * (q @ tf.transpose(v) + r @ tf.transpose(u))
+            error = 1 - tf.reduce_mean(coses)
         train = self.projector.trainable_variables + self.predictor.trainable_variables
-        grads = tape.gradient(loss, train)
+        grads = tape.gradient(error, train)
         self.optimizer.apply_gradients(
             [(g, v) for g, v in zip(grads, train) if g is not None]
         )
-        self.loss_tr.update_state(loss)
+        self.loss_tr.update_state(error)
         return dict(loss=self.loss_tr.result())
 
     def call(self, image, training=None):
@@ -158,7 +148,7 @@ class SimSiam(tf.keras.Model):
 
 
 class MoCoV2(SimSiam):
-    def __init__(self, momentum=1 - 1e-3, temperature=7e-2, max_keys=1024, **kwargs):
+    def __init__(self, momentum=1 - 1e-3, temperature=7e-2, max_keys=65536, **kwargs):
         super().__init__(**kwargs)
         projector = self.projector
         kdict_init = tf.random.normal([max_keys, self.projector.output.shape[-1]])
@@ -168,7 +158,6 @@ class MoCoV2(SimSiam):
         self.projector_k.set_weights(projector.get_weights())
         self.rho = momentum
         self.tau = temperature
-        delattr(self, "predictor")
 
     def update_key_encoder(self):
         rho = self.rho
@@ -178,24 +167,25 @@ class MoCoV2(SimSiam):
             u.assign(u * rho + v * (1 - rho))
 
     def update_key_dictionary(self, keys):
-        # truncate old keys
-        self.kdict.assign(self.kdict[tf.shape(keys)[0] :, ...])
-        # append new keys
-        self.kdict.assign(
-            tf.math.l2_normalize(tf.concat([self.kdict, keys], axis=0), axis=-1)
-        )
+        trunc = tf.shape(keys)[0]
+        kdict = self.kdict[trunc:, ...]
+        nkeys = tf.math.l2_normalize(keys, axis=-1)
+        self.kdict.assign(tf.concat([kdict, nkeys], axis=0))
 
     def contrastive_loss(self, u, v):
-        q = tf.math.l2_normalize(self.projector_q(u), axis=-1)
+        q = self.predictor(self.projector_q(u))
+        q = tf.math.l2_normalize(q, axis=-1)
         k = tf.math.l2_normalize(self.projector_k(v), axis=-1)
         batch_size = tf.shape(q)[0]
         pos_logits = q @ tf.transpose(k)
         neg_logits = q @ tf.transpose(self.kdict)
-        logits = tf.concat([pos_logits, neg_logits], axis=-1)
-        logits = logits * (1 / self.tau)
+        logits = tf.math.divide_no_nan(
+            tf.concat([pos_logits, neg_logits], axis=-1), self.tau
+        )
         labels = tf.zeros(batch_size, dtype=tf.int64)
-        loss = tf.nn.sparse_softmax_cross_entropy_with_logits(labels, logits) / tf.cast(
-            batch_size, dtype=tf.float32
+        loss = tf.math.divide_no_nan(
+            tf.nn.sparse_softmax_cross_entropy_with_logits(labels, logits),
+            tf.cast(batch_size, tf.float32),
         )
         return loss, q, k
 

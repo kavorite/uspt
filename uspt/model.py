@@ -149,7 +149,7 @@ class SimSiam(tf.keras.Model):
 
 class MoCoV2(SimSiam):
     def __init__(self, momentum=1 - 1e-3, temperature=7e-2, max_keys=1024, **kwargs):
-        super().__init__(**kwargs)
+        super().__init__(**kwargs, predictor=None)
         projector = self.projector
         kdict_init = tf.math.l2_normalize(
             tf.random.normal([max_keys, self.projector.output.shape[-1]]), axis=0
@@ -175,21 +175,20 @@ class MoCoV2(SimSiam):
         self.kdict.assign(tf.concat([kdict, nkeys], axis=0))
 
     def contrastive_loss(self, u, v):
-        q = self.predictor(self.projector_q(u))
-        q = tf.math.l2_normalize(q, axis=-1)
-        k = tf.math.l2_normalize(self.projector_k(v), axis=-1)
-        batch_size = tf.shape(q)[0]
-        pos_logits = q @ tf.transpose(k)
+        q = tf.math.l2_normalize(self.projector_q(u, training=True), axis=-1)
+        k = tf.math.l2_normalize(self.projector_k(v, training=False), axis=-1)
+        pos_logits = q @ tf.transpose(tf.stop_gradient(k))
         neg_logits = q @ tf.transpose(self.kdict)
+        batch_size = tf.shape(q)[0]
         logits = tf.math.divide_no_nan(
             tf.concat([pos_logits, neg_logits], axis=-1), self.tau
         )
         labels = tf.zeros(batch_size, dtype=tf.int64)
-        loss = tf.math.divide_no_nan(
+        errors = tf.math.divide_no_nan(
             tf.nn.sparse_softmax_cross_entropy_with_logits(labels, logits),
             tf.cast(batch_size, tf.float32),
         )
-        return loss, q, k
+        return errors, q, k
 
     def symmetric_contrastive_loss(self, u, v):
         l_uv, q_uv, k_uv = self.contrastive_loss(u, v)
@@ -204,11 +203,8 @@ class MoCoV2(SimSiam):
         u, v = self.augmented_pair(data)
         with tf.GradientTape() as tape:
             loss, qrys, keys = self.symmetric_contrastive_loss(u, v)
-            tf.stop_gradient(keys)
         self.update_key_dictionary(keys)
-        train = (
-            self.projector_q.trainable_variables + self.predictor.trainable_variables
-        )
+        train = self.projector_q.trainable_variables
         grads = tape.gradient(loss, train)
         self.optimizer.apply_gradients(
             [(g, v) for g, v in zip(grads, train) if g is not None]

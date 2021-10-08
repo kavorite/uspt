@@ -3,6 +3,7 @@ import os
 
 import tensorflow as tf
 import tensorflow_addons as tfa
+from tensorflow.python.ops.parsing_config import FixedLenFeature
 
 
 def make_xform_annotator(
@@ -118,7 +119,7 @@ def read_records(shards, deserialize):
     )
 
 
-def make_dataset(
+def xform_dataset(
     image_shape,
     shards,
     deserialize=record_parser(
@@ -159,5 +160,27 @@ def supervised_dataset(
             num_parallel_calls=tf.data.AUTOTUNE,
             deterministic=False,
         )
+        .apply(tf.data.experimental.ignore_errors())
+    )
+
+
+def contrastive_dataset(
+    image_shape,
+    shards,
+    deserialize=record_parser(
+        feature_desc=dict(image_str=tf.io.FixedLenFeature((), tf.string))
+    ),
+    augment=make_xform_annotator(include_xforms=False),
+):
+    return (
+        read_records(shards, deserialize)
+        .map(
+            make_preprocessor(image_shape, roi_splits=1),
+            num_parallel_calls=tf.data.AUTOTUNE,
+            deterministic=False,
+        )
+        .map(lambda x, _: tf.stack((x, x)))
+        .map(augment, num_parallel_calls=tf.data.AUTOTUNE)
+        .map(tf.unstack)
         .apply(tf.data.experimental.ignore_errors())
     )

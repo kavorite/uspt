@@ -86,7 +86,6 @@ class SimSiam(tf.keras.Model):
         self,
         projector=add_projection_head(build_encoder(), project_dim=2048),
         predictor=build_predictor(project_dim=2048, latent_dim=512),
-        xformer=None,
     ):
         """
         Constructs a SimSiam (simple siamese) unsupervised training harness.
@@ -96,8 +95,6 @@ class SimSiam(tf.keras.Model):
         projector: Image feature extraction backbone with projection head
         attached.
         predictor: Autoencoder for projected representations.
-        xformer: Data augmentation function for images, or None, if the model
-        includes preprocessing layers that perform data augmentation.
 
         References
         -------
@@ -111,7 +108,6 @@ class SimSiam(tf.keras.Model):
             name="uspt_encoder",
         )
         self.predictor = predictor
-        self.xformer = xformer if xformer is not None else (lambda x: x)
         self.loss_tr = tf.keras.metrics.Mean(name="loss")
         self.build(projector.input.shape)
 
@@ -119,12 +115,8 @@ class SimSiam(tf.keras.Model):
     def metrics(self):
         return [self.loss_tr]
 
-    def augmented_pair(self, x):
-        u, v = self.xformer(x), self.xformer(x)
-        return u, v
-
     def train_step(self, data):
-        s, t = self.augmented_pair(data)
+        s, t = data
         x = tf.concat([s, t], axis=0)
         with tf.GradientTape() as tape:
             p = tf.math.l2_normalize(self.projector(x), axis=-1, epsilon=1e-9)
@@ -199,10 +191,9 @@ class MoCoV2(SimSiam):
         return loss, qrys, keys
 
     def train_step(self, data):
-        # https://github.com/facebookresearch/moco/blob/main/moco/builder.py
-        u, v = self.augmented_pair(data)
+        s, t = data
         with tf.GradientTape() as tape:
-            loss, qrys, keys = self.symmetric_contrastive_loss(u, v)
+            loss, qrys, keys = self.symmetric_contrastive_loss(s, t)
         self.update_key_dictionary(keys)
         train = self.projector_q.trainable_variables
         grads = tape.gradient(loss, train)

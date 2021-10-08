@@ -152,7 +152,7 @@ class MoCoV2(SimSiam):
         super().__init__(**kwargs, predictor=None)
         projector = self.projector
         kdict_init = tf.math.l2_normalize(
-            tf.random.normal([max_keys, self.projector.output.shape[-1]]), axis=0
+            tf.random.normal([max_keys, self.projector.output.shape[-1]]), axis=-1
         )
         self.kdict = tf.Variable(initial_value=kdict_init)
         self.projector_q = projector

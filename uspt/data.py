@@ -1,9 +1,165 @@
 import math
 import os
+from typing import Iterable
 
 import tensorflow as tf
 import tensorflow_addons as tfa
-from tensorflow.python.ops.parsing_config import FixedLenFeature
+
+
+@tf.keras.utils.register_keras_serializable(package="kavorite/uspt", name="ColorJitter")
+class ColorJitter(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        hue_factor=0.4,
+        saturation_factor=0.2,
+        value_factor=0.4,
+        contrast_factor=0.1,
+        name="color_jitter",
+        seed=None,
+        **kwargs
+    ):
+        super().__init__(name=name, **kwargs)
+        self.hue_factor = hue_factor
+        self.sat_factor = saturation_factor
+        self.val_factor = value_factor
+        self.ctr_factor = contrast_factor
+        self.seed = seed
+        if seed is not None:
+            self.rng = tf.random.Generator.from_seed(seed)
+        else:
+            self.rng = tf.random.Generator.from_non_deterministic_state()
+
+    def call(self, img, training=None):
+        if training is None:
+            training = tf.keras.backend.learning_phase()
+        if not training:
+            seeds = self.rng.make_seeds(count=4)
+            img = tf.image.stateless_random_brightness(
+                img, self.val_factor, seeds[:, 0]
+            )
+            img = tf.image.stateless_random_contrast(
+                img, 1.0 - self.ctr_factor, 1.0 + self.ctr_factor, seeds[:, 1]
+            )
+            img = tf.image.stateless_random_hue(img, self.hue_factor, seeds[:, 2])
+            img = tf.image.stateless_random_saturation(
+                img, 1.0 - self.sat_factor, 1.0 + self.sat_factor, seeds[:, 3]
+            )
+        return img
+
+    def get_config(self):
+        base = super().get_config()
+        conf = dict(
+            hue_factor=self.hue_factor,
+            saturation_factor=self.sat_factor,
+            value_factor=self.val_factor,
+            contrast_factor=self.ctr_factor,
+            seed=self.seed,
+        )
+        base.update(conf)
+        return base
+
+
+# simplified version of
+# https://github.com/facebookresearch/dino/blob/main/main_dino.py
+@tf.keras.utils.register_keras_serializable(package="kavorite/uspt", name="DINOAugment")
+class DINOAugment(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        crop_scale_factor=2.5,
+        global_crop_shape=[224, 224, 3],
+        local_crop_shape=[84, 84, 3],
+        local_crop_count=8,
+        seed=None,
+        name="dino_augment",
+        **kwargs
+    ):
+        super().__init__(name=name, **kwargs)
+        self.crop_scale_factor = crop_scale_factor
+        self.global_crop_shape = global_crop_shape
+        self.local_crop_shape = local_crop_shape
+        self.local_crop_count = local_crop_count
+        self.jitter = ColorJitter()
+        if seed is not None:
+            self.rng = tf.random.Generator.from_seed(seed)
+        else:
+            self.rng = tf.random.Generator.from_non_deterministic_state()
+
+    def get_config(self):
+        base = super().get_config()
+        conf = dict(
+            crop_scale_factor=self.crop_scale_factor,
+            global_crop_shape=self.global_crop_shape,
+            local_crop_shape=self.local_crop_shape,
+            local_crop_count=self.local_crop_count,
+            jitter=self.jitter,
+        )
+        base.update(conf)
+        return base
+
+    def base_augment(self, img):
+        img = tf.image.stateless_random_flip_left_right(
+            img, self.rng.make_seeds()[:, 0]
+        )
+        img = tf.cond(
+            self.rng.uniform(()) <= 0.8,
+            lambda: self.jitter(img),
+            lambda: img,
+        )
+        img = tf.cond(
+            self.rng.uniform(()) <= 0.2,
+            lambda: tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(img)),
+            lambda: img,
+        )
+        return img
+
+    def solarize(self, img):
+        return tf.where(img < 128, img, 255 - img)
+
+    def blur(self, img):
+        def gauss_kernel(channels, kernel_size, sigma):
+            ax = tf.range(-kernel_size // 2 + 1.0, kernel_size // 2 + 1.0)
+            xx, yy = tf.meshgrid(ax, ax)
+            kernel = tf.exp(-(xx ** 2 + yy ** 2) / (2.0 * sigma ** 2))
+            kernel = kernel / tf.reduce_sum(kernel)
+            kernel = tf.tile(kernel[..., None], [1, 1, channels])
+            return kernel
+
+        kernel = gauss_kernel(
+            tf.shape(img)[-1],
+            kernel_size=3,
+            sigma=self.rng.uniform((), minval=0.1, maxval=2.0),
+        )[..., None]
+        return tf.nn.depthwise_conv2d(
+            img[None, ...], kernel, [1, 1, 1, 1], padding="SAME", data_format="NHWC"
+        )[0]
+
+    def call(self, img):
+        img_scale = self.rng.uniform((), minval=1.0, maxval=self.crop_scale_factor)
+        img_shape = tf.cast(self.global_crop_shape[-3:-1], tf.float32) * img_scale
+        img = tf.image.resize(
+            img,
+            tf.cast(tf.round(img_shape), tf.int32),
+            method=tf.image.ResizeMethod.BICUBIC,
+        )
+        seeds = self.rng.make_seeds(count=2 + self.local_crop_count)
+        u = tf.image.stateless_random_crop(img, self.global_crop_shape, seeds[:, 0])
+        u = self.base_augment(u)
+        u = self.blur(u)
+
+        v = tf.image.stateless_random_crop(img, self.global_crop_shape, seeds[:, 1])
+        v = self.base_augment(v)
+        v = tf.cond(self.rng.uniform(()) > 0.1, lambda: v, lambda: self.blur(v))
+        v = tf.cond(self.rng.uniform(()) > 0.2, lambda: v, lambda: self.solarize(v))
+
+        xs = []
+        for i in range(self.local_crop_count):
+            x = tf.image.stateless_random_crop(
+                img, self.local_crop_shape, seeds[:, i + 2]
+            )
+            x = self.base_augment(x)
+            x = tf.image.resize(x, self.global_crop_shape[-3:-1])
+            xs.append(x)
+        return (u, v, *xs)
 
 
 def make_xform_annotator(
@@ -53,7 +209,7 @@ def make_xform_annotator(
     return xform_and_annotate
 
 
-def make_preprocessor(img_shape, roi_splits):
+def make_preprocessor(img_shape, roi_splits=1):
     if isinstance(roi_splits, int):
         roi_splits = [roi_splits] * 2
 
@@ -177,10 +333,32 @@ def contrastive_dataset(
         .map(
             make_preprocessor(image_shape, roi_splits=1),
             num_parallel_calls=tf.data.AUTOTUNE,
-            deterministic=False,
         )
         .map(lambda x, _: tf.stack((x, x)))
         .map(augment, num_parallel_calls=tf.data.AUTOTUNE)
         .map(tf.unstack)
+        .apply(tf.data.experimental.ignore_errors())
+    )
+
+
+def dino_dataset(
+    image_shape,
+    shards,
+    deserialize=record_parser(
+        feature_desc=dict(image_str=tf.io.FixedLenFeature((), tf.string))
+    ),
+    **kwargs
+):
+    return (
+        read_records(shards, deserialize)
+        .map(
+            lambda record: tf.cast(
+                tf.image.decode_jpeg(record["image_str"]), tf.float32
+            ),
+        )
+        .map(
+            DINOAugment(global_crop_shape=image_shape, **kwargs),
+            num_parallel_calls=tf.data.AUTOTUNE,
+        )
         .apply(tf.data.experimental.ignore_errors())
     )

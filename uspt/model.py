@@ -98,7 +98,7 @@ class SimSiam(tf.keras.Model):
 
         References
         -------
-        https://keras.io/examples/vision/simsiam/
+        https://arxiv.org/abs/2011.10566
         """
         super().__init__(self)
         self.projector = projector
@@ -139,12 +139,89 @@ class SimSiam(tf.keras.Model):
         return self.projector(image, training=training)
 
 
+class DINO(tf.keras.Model):
+    def __init__(
+        self,
+        student_temp=0.1,
+        teacher_temp=0.04,
+        weight_momentum=1 - 1e-4,
+        center_momentum=0.9,
+        projector=add_projection_head(build_encoder(), project_dim=2048),
+        **kwargs,
+    ):
+        super().__init__(**kwargs)
+        self.tau_s = student_temp
+        self.tau_t = teacher_temp
+        self.rho_t = weight_momentum
+        self.rho_c = center_momentum
+        self.projector = projector
+        self.encoder = tf.keras.Model(
+            projector.input,
+            projector.get_layer("encoding").output,
+            name="uspt_encoder",
+        )
+        self.student = projector
+        self.teacher = tf.keras.models.clone_model(projector)
+        self.center = tf.Variable(
+            initial_value=tf.zeros([1, *projector.output.shape[1:]])
+        )
+        self.loss_tr = tf.keras.metrics.Mean(name="loss")
+
+    def distill_loss(self, t, s):
+        t = tf.stop_gradient(t)
+        t = tf.math.divide_no_nan(t - self.center, self.tau_t)
+        s = tf.math.divide_no_nan(s, self.tau_s)
+        return -tf.nn.softmax(t) * tf.math.log(tf.nn.softmax(s))
+
+    def update_teacher(self):
+        rho = self.rho_t
+        w_s = self.student.trainable_variables
+        w_t = self.teacher.trainable_variables
+        for u, v in zip(w_t, w_s):
+            u.assign(u * rho + v * (1 - rho))
+
+    def update_center(self, keys):
+        m = self.rho_c
+        u = self.center
+        v = tf.reduce_mean(keys, axis=0)
+        self.center.assign(m * u + (1 - m) * v)
+
+    def train_step(self, data):
+        u, v, *_ = data
+        with tf.GradientTape() as tape:
+            s = [self.student(x, training=False) for x in data]
+            t = [self.teacher(x, training=False) for x in (u, v)]
+            error = 0
+            error_terms = 0
+            for i, k in enumerate(t):
+                for j, q in enumerate(s):
+                    if i != j:
+                        error += tf.reduce_sum(self.distill_loss(k, q))
+                        error_terms += 1
+            error = tf.math.divide_no_nan(error, error_terms)
+        train = self.student.trainable_variables
+        grads = tape.gradient(error, train)
+        self.optimizer.apply_gradients(
+            [(g, v) for g, v in zip(grads, train) if g is not None]
+        )
+        self.loss_tr.update_state(error)
+        self.update_teacher()
+        self.update_center(tf.concat(t, axis=0))
+        return dict(loss=self.loss_tr.result())
+
+
 class MoCoV2(SimSiam):
-    def __init__(self, momentum=1 - 1e-3, temperature=7e-2, max_keys=1024, **kwargs):
+    def __init__(
+        self,
+        projector=add_projection_head(build_encoder(), project_dim=2048),
+        momentum=1 - 1e-4,
+        temperature=7e-2,
+        max_keys=1024,
+        **kwargs,
+    ):
         super().__init__(**kwargs, predictor=None)
-        projector = self.projector
         kdict_init = tf.math.l2_normalize(
-            tf.random.normal([max_keys, self.projector.output.shape[-1]]), axis=-1
+            tf.random.normal([max_keys, projector.output.shape[-1]]), axis=-1
         )
         self.kdict = tf.Variable(initial_value=kdict_init)
         self.projector_q = projector

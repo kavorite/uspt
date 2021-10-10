@@ -267,12 +267,12 @@ class MoCoV2(SimSiam):
 
     def train_step(self, data):
         s, *t = data
+        p = tf.math.l2_normalize(self.projector_k(s, training=False), axis=-1)
         with tf.GradientTape() as tape:
-            p = tf.math.l2_normalize(self.projector_q(s, training=True), axis=-1)
             error = 0
             error_terms = 0
-            for v in t:
-                q = tf.math.l2_normalize(self.projector_k(v, training=False), axis=-1)
+            for x in t:
+                q = tf.math.l2_normalize(self.projector_q(x, training=True), axis=-1)
                 loss, qrys, keys = self.symmetric_contrastive_loss(p, q)
                 error += loss
                 error_terms += 1

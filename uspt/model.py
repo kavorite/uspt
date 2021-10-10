@@ -243,9 +243,7 @@ class MoCoV2(SimSiam):
         nkeys = tf.math.l2_normalize(keys, axis=-1)
         self.kdict.assign(tf.concat([kdict, nkeys], axis=0))
 
-    def contrastive_loss(self, u, v):
-        q = tf.math.l2_normalize(self.projector_q(u, training=True), axis=-1)
-        k = tf.math.l2_normalize(self.projector_k(v, training=False), axis=-1)
+    def contrastive_loss(self, q, k):
         pos_logits = q @ tf.transpose(tf.stop_gradient(k))
         neg_logits = q @ tf.transpose(self.kdict)
         batch_size = tf.shape(q)[0]
@@ -259,9 +257,9 @@ class MoCoV2(SimSiam):
         )
         return errors, q, k
 
-    def symmetric_contrastive_loss(self, u, v):
-        l_uv, q_uv, k_uv = self.contrastive_loss(u, v)
-        l_vu, q_vu, k_vu = self.contrastive_loss(v, u)
+    def symmetric_contrastive_loss(self, q, k):
+        l_uv, q_uv, k_uv = self.contrastive_loss(q, k)
+        l_vu, q_vu, k_vu = self.contrastive_loss(k, q)
         loss = tf.reduce_mean(l_uv + l_vu)
         qrys = tf.concat([q_uv, q_vu], axis=0)
         keys = tf.concat([k_uv, k_vu], axis=0)
@@ -270,10 +268,12 @@ class MoCoV2(SimSiam):
     def train_step(self, data):
         s, *t = data
         with tf.GradientTape() as tape:
+            p = tf.math.l2_normalize(self.projector_q(s, training=True), axis=-1)
             error = 0
             error_terms = 0
-            for x in t:
-                loss, qrys, keys = self.symmetric_contrastive_loss(s, x)
+            for v in t:
+                q = tf.math.l2_normalize(self.projector_k(v, training=False), axis=-1)
+                loss, qrys, keys = self.symmetric_contrastive_loss(p, q)
                 error += loss
                 error_terms += 1
         self.update_key_dictionary(keys)

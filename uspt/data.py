@@ -59,6 +59,69 @@ class ColorJitter(tf.keras.layers.Layer):
         return base
 
 
+@tf.keras.utils.register_keras_serializable(package="kavorite/uspt", name="MultiCrop")
+class MultiCrop(tf.keras.layers.Layer):
+    def __init__(
+        self,
+        crop_scale=[0.05, 0.40],
+        crop_shape=[224, 224, 3],
+        crop_count=8,
+        name="multi_crop",
+        seed=None,
+        **kwargs
+    ):
+        super().__init__(name=name, **kwargs)
+        self.crop_scale = crop_scale
+        self.crop_shape = crop_shape
+        self.crop_count = crop_count
+        self.seed = seed
+        if seed is not None:
+            self.rng = tf.random.Generator.from_seed(seed)
+        else:
+            self.rng = tf.random.Generator.from_non_deterministic_state()
+
+    def get_config(self):
+        base = super().get_config()
+        conf = dict(
+            crop_scale=self.crop_scale,
+            crop_shape=self.crop_shape,
+            crop_count=self.crop_count,
+            seed=self.seed,
+        )
+        base.update(conf)
+        return base
+
+    def call(self, img):
+        if tf.reduce_any(tf.shape(img)[-3:-1] < self.crop_shape[-3:-1]):
+            img = tf.image.resize_with_pad(
+                img,
+                self.crop_shape[0],
+                self.crop_shape[1],
+                tf.image.ResizeMethod.BICUBIC,
+            )
+        seeds = self.rng.make_seeds(count=self.crop_count)
+        crops = []
+        for i in range(self.crop_count):
+            scale = tf.random.stateless_uniform(
+                shape=(),
+                seed=seeds[:, i],
+                minval=self.crop_scale[0],
+                maxval=self.crop_scale[1],
+            )
+            shape = tf.math.round(tf.cast(tf.shape(img)[-3:-1], tf.float32) * scale)
+            shape = tf.concat(
+                [tf.cast(shape, tf.int32), [self.crop_shape[-1]]], axis=-1
+            )
+            patch = tf.image.stateless_random_crop(img, shape, seeds[:, i])
+            patch = (
+                tf.image.resize(
+                    patch, self.crop_shape[-3:-1], method=tf.image.ResizeMethod.BICUBIC
+                ),
+            )
+            crops.append(patch)
+        return crops
+
+
 # simplified version of
 # https://github.com/facebookresearch/dino/blob/main/main_dino.py
 @tf.keras.utils.register_keras_serializable(package="kavorite/uspt", name="DINOAugment")
@@ -79,6 +142,7 @@ class DINOAugment(tf.keras.layers.Layer):
         self.local_crop_shape = local_crop_shape
         self.local_crop_count = local_crop_count
         self.jitter = ColorJitter()
+        self.seed = seed
         if seed is not None:
             self.rng = tf.random.Generator.from_seed(seed)
         else:
@@ -360,5 +424,30 @@ def dino_dataset(
             DINOAugment(global_crop_shape=image_shape, **kwargs),
             num_parallel_calls=tf.data.AUTOTUNE,
         )
+        .apply(tf.data.experimental.ignore_errors())
+    )
+
+
+def multicrop_dataset(
+    image_shape,
+    shards,
+    deserialize=record_parser(
+        feature_desc=dict(image_str=tf.io.FixedLenFeature((), tf.string))
+    ),
+    **kwargs
+):
+    multicrop = MultiCrop(crop_shape=image_shape, **kwargs)
+    images = read_records(shards, deserialize).map(
+        lambda record: tf.cast(tf.image.decode_jpeg(record["image_str"]), tf.float32)
+    )
+    resized = images.map(
+        lambda img: tf.image.resize(img, image_shape[-3:-1]),
+        num_parallel_calls=tf.data.AUTOTUNE,
+    )
+    cropped = images.map(multicrop, num_parallel_calls=tf.data.AUTOTUNE)
+    return (
+        tf.data.Dataset.zip((resized, cropped))
+        .map(lambda image, crops: [image, *crops])
+        .prefetch(tf.data.AUTOTUNE)
         .apply(tf.data.experimental.ignore_errors())
     )

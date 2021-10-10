@@ -64,7 +64,7 @@ class MultiCrop(tf.keras.layers.Layer):
     def __init__(
         self,
         crop_scale=[0.05, 0.40],
-        crop_shape=[224, 224, 3],
+        crop_dimen=[224, 224],
         crop_count=8,
         name="multi_crop",
         seed=None,
@@ -72,7 +72,7 @@ class MultiCrop(tf.keras.layers.Layer):
     ):
         super().__init__(name=name, **kwargs)
         self.crop_scale = crop_scale
-        self.crop_shape = crop_shape
+        self.crop_dimen = crop_dimen
         self.crop_count = crop_count
         self.seed = seed
         if seed is not None:
@@ -84,7 +84,7 @@ class MultiCrop(tf.keras.layers.Layer):
         base = super().get_config()
         conf = dict(
             crop_scale=self.crop_scale,
-            crop_shape=self.crop_shape,
+            crop_dimen=self.crop_dimen,
             crop_count=self.crop_count,
             seed=self.seed,
         )
@@ -92,11 +92,16 @@ class MultiCrop(tf.keras.layers.Layer):
         return base
 
     def call(self, img):
-        if tf.reduce_any(tf.shape(img)[-3:-1] < self.crop_shape[-3:-1]):
+        img = tf.cond(
+            tf.shape(img)[-1] < 3,
+            lambda: tf.image.grayscale_to_rgb(img[..., :1]),
+            lambda: img[..., :3],
+        )
+        if tf.reduce_any(tf.shape(img)[-3:-1] < self.crop_dimen):
             img = tf.image.resize_with_pad(
                 img,
-                self.crop_shape[0],
-                self.crop_shape[1],
+                self.crop_dimen[0],
+                self.crop_dimen[1],
                 tf.image.ResizeMethod.BICUBIC,
             )
         seeds = self.rng.make_seeds(count=self.crop_count)
@@ -109,13 +114,11 @@ class MultiCrop(tf.keras.layers.Layer):
                 maxval=self.crop_scale[1],
             )
             shape = tf.math.round(tf.cast(tf.shape(img)[-3:-1], tf.float32) * scale)
-            shape = tf.concat(
-                [tf.cast(shape, tf.int32), [self.crop_shape[-1]]], axis=-1
-            )
+            shape = tf.concat([tf.cast(shape, tf.int32), [3]], axis=-1)
             patch = tf.image.stateless_random_crop(img, shape, seeds[:, i])
             patch = (
                 tf.image.resize(
-                    patch, self.crop_shape[-3:-1], method=tf.image.ResizeMethod.BICUBIC
+                    patch, self.crop_dimen, method=tf.image.ResizeMethod.BICUBIC
                 ),
             )
             crops.append(patch)
@@ -436,7 +439,7 @@ def multicrop_dataset(
     ),
     **kwargs
 ):
-    multicrop = MultiCrop(crop_shape=image_shape, **kwargs)
+    multicrop = MultiCrop(crop_dimen=image_shape[-3:-1], **kwargs)
     images = read_records(shards, deserialize).map(
         lambda record: tf.cast(tf.image.decode_jpeg(record["image_str"]), tf.float32)
     )

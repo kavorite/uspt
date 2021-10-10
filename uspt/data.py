@@ -92,11 +92,6 @@ class MultiCrop(tf.keras.layers.Layer):
         return base
 
     def call(self, img):
-        img = tf.cond(
-            tf.shape(img)[-1] < 3,
-            lambda: tf.image.grayscale_to_rgb(img[..., :1]),
-            lambda: img[..., :3],
-        )
         if tf.reduce_any(tf.shape(img)[-3:-1] < self.crop_dimen):
             img = tf.image.resize_with_pad(
                 img,
@@ -114,12 +109,10 @@ class MultiCrop(tf.keras.layers.Layer):
                 maxval=self.crop_scale[1],
             )
             shape = tf.math.round(tf.cast(tf.shape(img)[-3:-1], tf.float32) * scale)
-            shape = tf.concat([tf.cast(shape, tf.int32), [3]], axis=-1)
+            shape = tf.concat([tf.cast(shape, tf.int32), [tf.shape(img)[-1]]], axis=-1)
             patch = tf.image.stateless_random_crop(img, shape, seeds[:, i])
-            patch = (
-                tf.image.resize(
-                    patch, self.crop_dimen, method=tf.image.ResizeMethod.BICUBIC
-                ),
+            patch = tf.image.resize(
+                patch, self.crop_dimen, method=tf.image.ResizeMethod.BICUBIC
             )
             crops.append(patch)
         return crops
@@ -428,6 +421,14 @@ def dino_dataset(
             num_parallel_calls=tf.data.AUTOTUNE,
         )
         .apply(tf.data.experimental.ignore_errors())
+    )
+
+
+def coerce_rgb(img):
+    return tf.cond(
+        tf.shape(img)[-1] < 3,
+        lambda: tf.image.grayscale_to_rgb(img[..., :1]),
+        lambda: img[..., :3],
     )
 
 

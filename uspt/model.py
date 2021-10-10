@@ -268,12 +268,18 @@ class MoCoV2(SimSiam):
         return loss, qrys, keys
 
     def train_step(self, data):
-        s, t = data
+        s, *t = data
         with tf.GradientTape() as tape:
-            loss, qrys, keys = self.symmetric_contrastive_loss(s, t)
+            error = 0
+            error_terms = 0
+            for x in t:
+                loss, qrys, keys = self.symmetric_contrastive_loss(s, x)
+                error += loss
+                error_terms += 1
         self.update_key_dictionary(keys)
+        error /= error_terms
         train = self.projector_q.trainable_variables
-        grads = tape.gradient(loss, train)
+        grads = tape.gradient(error, train)
         self.optimizer.apply_gradients(
             [(g, v) for g, v in zip(grads, train) if g is not None]
         )

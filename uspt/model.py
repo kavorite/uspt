@@ -276,13 +276,13 @@ class MoCoV2(SimSiam):
                 loss, qrys, keys = self.symmetric_contrastive_loss(p, q)
                 error += loss
                 error_terms += 1
+            error /= error_terms
         self.update_key_dictionary(keys)
-        error /= error_terms
         train = self.projector_q.trainable_variables
         grads = tape.gradient(error, train)
         self.optimizer.apply_gradients(
             [(g, v) for g, v in zip(grads, train) if g is not None]
         )
         self.update_key_encoder()
-        self.loss_tr.update_state(loss)
+        self.loss_tr.update_state(error)
         return dict(loss=self.loss_tr.result())

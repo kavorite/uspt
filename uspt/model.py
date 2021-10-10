@@ -169,9 +169,9 @@ class DINO(tf.keras.Model):
 
     def distill_loss(self, t, s):
         t = tf.stop_gradient(t)
-        t = tf.math.divide_no_nan(t - self.center, self.tau_t)
-        s = tf.math.divide_no_nan(s, self.tau_s)
-        return -tf.nn.softmax(t) * tf.math.log(tf.nn.softmax(s))
+        t = tf.nn.softmax(tf.math.divide_no_nan(t - self.center, self.tau_t))
+        s = tf.nn.softmax(tf.math.divide_no_nan(s, self.tau_s))
+        return -tf.reduce_mean(tf.reduce_sum(t * tf.math.log(s), axis=-1))
 
     def update_teacher(self):
         rho = self.rho_t

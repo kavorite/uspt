@@ -110,6 +110,7 @@ class MultiCrop(tf.keras.layers.Layer):
             )
             shape = tf.math.round(tf.cast(tf.shape(img)[-3:-1], tf.float32) * scale)
             shape = tf.concat([tf.cast(shape, tf.int32), [tf.shape(img)[-1]]], axis=-1)
+            shape = tf.concat([tf.shape(img)[:-3], shape], axis=-1)
             patch = tf.image.stateless_random_crop(img, shape, seeds[:, i])
             patch = tf.image.resize(
                 patch, self.crop_dimen, method=tf.image.ResizeMethod.BICUBIC

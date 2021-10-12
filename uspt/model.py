@@ -116,15 +116,22 @@ class SimSiam(tf.keras.Model):
         return [self.loss_tr]
 
     def train_step(self, data):
-        s, t = data
-        x = tf.concat([s, t], axis=0)
+        s, *t = data
+        error = 0
+        error_terms = 0
         with tf.GradientTape() as tape:
-            p = tf.math.l2_normalize(self.projector(x), axis=-1, epsilon=1e-9)
-            z = tf.math.l2_normalize(self.predictor(p), axis=-1, epsilon=1e-9)
-            q, r = tf.split(p, 2, axis=0)
-            u, v = tf.split(z, 2, axis=0)
-            coses = 0.5 * (q @ tf.transpose(v) + r @ tf.transpose(u))
-            error = 1 - tf.reduce_mean(coses)
+            p = tf.math.l2_normalize(self.projector(s, training=True), axis=-1)
+            u = self.predictor(p, training=True)
+            for x in t:
+                q = tf.linalg.l2_normalize(self.projector(x, training=True), axis=-1)
+                v = tf.linalg.l2_normalize(self.predictor(q, training=True), axis=-1)
+                coses = 0.5 * (
+                    q @ tf.transpose(tf.stop_gradient(v))
+                    + p @ tf.transpose(tf.stop_gradient(u))
+                )
+                error += 1 - tf.reduce_mean(coses)
+                error_terms += 1
+        error /= error_terms
         train = self.projector.trainable_variables + self.predictor.trainable_variables
         grads = tape.gradient(error, train)
         self.optimizer.apply_gradients(

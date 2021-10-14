@@ -17,6 +17,12 @@ def learning_phase(method):
     return learning_phase_op
 
 
+def register(cls):
+    return tf.keras.utils.register_keras_serializable(
+        package="kavorite/uspt", name=cls.__name__
+    )(cls)
+
+
 class Pseudorandom(tf.keras.layers.Layer):
     def __init__(self, seed=None, **kwargs):
         super().__init__(**kwargs)
@@ -32,9 +38,7 @@ class Pseudorandom(tf.keras.layers.Layer):
         return conf
 
 
-@tf.keras.utils.register_keras_serializable(
-    package="kavorite/uspt", name="WithProbability"
-)
+@register
 class WithProbability(Pseudorandom):
     def __init__(self, inner, p=0.5, name="with_probability", **kwargs):
         super().__init__(name=name, **kwargs)
@@ -54,7 +58,7 @@ class WithProbability(Pseudorandom):
         )
 
 
-@tf.keras.utils.register_keras_serializable(package="kavorite/uspt", name="ColorJitter")
+@register
 class ColorJitter(Pseudorandom):
     def __init__(
         self,
@@ -98,7 +102,7 @@ class ColorJitter(Pseudorandom):
         return base
 
 
-@tf.keras.utils.register_keras_serializable(package="kavorite/uspt", name="RandomBlur")
+@register
 class RandomBlur(Pseudorandom):
     def __init__(self, min_sigma=0.10, max_sigma=2.00, name="RandomBlur", **kwargs):
         super().__init__(name=name, **kwargs)
@@ -136,7 +140,7 @@ class RandomBlur(Pseudorandom):
         )
 
 
-@tf.keras.utils.register_keras_serializable(package="kavorite/uspt", name="Grayscale")
+@register
 class Grayscale(tf.keras.layers.Layer):
     def __init__(self, name="grayscale", **kwargs):
         super().__init__(name=name, **kwargs)
@@ -145,9 +149,7 @@ class Grayscale(tf.keras.layers.Layer):
         return tf.image.grayscale_to_rgb(tf.image.rgb_to_grayscale(images))
 
 
-@tf.keras.utils.register_keras_serializable(
-    package="kavorite/uspt", name="RandomSolarize"
-)
+@register
 class RandomSolarize(Pseudorandom):
     def __init__(
         self, min_threshold=128, max_threshold=128, name="RandomSolarize", **kwargs
@@ -169,7 +171,7 @@ class RandomSolarize(Pseudorandom):
         return tf.where(images < threshold, images, 255 - threshold)
 
 
-@tf.keras.utils.register_keras_serializable(package="kavorite/uspt", name="MultiCrop")
+@register
 class MultiCrop(Pseudorandom):
     def __init__(
         self,
@@ -226,7 +228,7 @@ class MultiCrop(Pseudorandom):
 
 # simplified version of
 # https://github.com/facebookresearch/dino/blob/main/main_dino.py
-@tf.keras.utils.register_keras_serializable(package="kavorite/uspt", name="DINOAugment")
+@register
 class DINOAugment(Pseudorandom):
     def __init__(
         self,

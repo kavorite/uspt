@@ -217,7 +217,7 @@ class DINO(tf.keras.Model):
         return dict(loss=self.loss_tr.result())
 
 
-class MoCoV2(SimSiam):
+class MoCoV2(tf.keras.Model):
     def __init__(
         self,
         projector=add_projection_head(build_encoder(), project_dim=2048),
@@ -226,16 +226,23 @@ class MoCoV2(SimSiam):
         max_keys=1024,
         **kwargs,
     ):
-        super().__init__(**kwargs, predictor=None)
+        super().__init__(**kwargs)
         kdict_init = tf.math.l2_normalize(
             tf.random.normal([max_keys, projector.output.shape[-1]]), axis=-1
         )
         self.kdict = tf.Variable(initial_value=kdict_init)
+        self.projector = projector
         self.projector_q = projector
+        self.encoder = tf.keras.Model(
+            projector.input,
+            projector.get_layer("encoding").output,
+            name="uspt_encoder",
+        )
         self.projector_k = tf.keras.models.clone_model(projector)
         self.projector_k.set_weights(projector.get_weights())
         self.rho = momentum
         self.tau = temperature
+        self.loss_tr = tf.keras.metrics.Mean(name="loss")
 
     def update_key_encoder(self):
         rho = self.rho

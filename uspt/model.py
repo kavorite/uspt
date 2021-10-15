@@ -1,5 +1,7 @@
 import tensorflow as tf
 
+from .data.augmentation import DINOAugment
+
 
 def se_block(x, channels):
     squeezed = x
@@ -39,12 +41,14 @@ def build_encoder(
     return tf.keras.Model(inputs, outputs, name="uspt_encoder")
 
 
-def add_projection_head(encoder, project_dim):
+def add_projection_head(encoder, project_dim, dropout=0.2, activation=tf.nn.silu):
     prefix = encoder.name
     projection = encoder.get_layer("encoding").output
     for layer in (
         tf.keras.layers.BatchNormalization(),
+        tf.keras.layers.Dropout(dropout),
         tf.keras.layers.Dense(project_dim, name="projection"),
+        tf.keras.layers.Dropout(dropout),
         tf.keras.layers.Activation(tf.nn.silu),
     ):
         projection = layer(projection)
@@ -154,6 +158,7 @@ class DINO(tf.keras.Model):
         weight_momentum=1 - 1e-4,
         center_momentum=0.9,
         projector=add_projection_head(build_encoder(), project_dim=2048),
+        augmenter=DINOAugment(),
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -161,6 +166,7 @@ class DINO(tf.keras.Model):
         self.tau_t = teacher_temp
         self.rho_t = weight_momentum
         self.rho_c = center_momentum
+        self.augmenter = augmenter
         self.projector = projector
         self.encoder = tf.keras.Model(
             projector.input,
@@ -194,7 +200,8 @@ class DINO(tf.keras.Model):
         self.center.assign(m * u + (1 - m) * v)
 
     def train_step(self, data):
-        u, v, *_ = data
+        u, v, *xs = self.augmenter(data)
+        data = (u, v, *xs)
         with tf.GradientTape() as tape:
             s = [self.student(x, training=False) for x in data]
             t = [self.teacher(x, training=False) for x in (u, v)]

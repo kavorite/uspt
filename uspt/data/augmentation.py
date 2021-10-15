@@ -2,6 +2,8 @@ import functools
 
 import tensorflow as tf
 
+from .common import coerce_rgb
+
 
 def learning_phase(method):
     @functools.wraps(method)
@@ -47,7 +49,7 @@ class WithProbability(Pseudorandom):
 
     def get_config(self):
         conf = super().get_config()
-        conf.update(dict(incidence=self.incidence, augment=self.augment))
+        conf.update(dict(p=self.incidence, inner=self.augment))
         return conf
 
     def call(self, data):
@@ -124,17 +126,14 @@ class RandomBlur(Pseudorandom):
         xx, yy = tf.meshgrid(ax, ax)
         kernel = tf.exp(-(xx ** 2 + yy ** 2) / (2.0 * sigma ** 2))
         kernel = kernel / tf.reduce_sum(kernel)
-        kernel = tf.tile(kernel[..., None], [1, 1, depth])
-        return kernel[..., None]
+        kernel = tf.repeat(tf.expand_dims(kernel, axis=-1), depth, axis=-1)
+        return kernel
 
     @learning_phase
     def call(self, images):
-        kernel = self.gaussian_kernel(depth=tf.shape(images)[-1], width=3)
-        images = tf.cond(
-            tf.rank(images) < 4,
-            lambda: images[None, ...],
-            lambda: images,
-        )
+        depth = tf.shape(images)[-1]
+        kernel = self.gaussian_kernel(depth, width=3)
+        kernel = tf.expand_dims(kernel, axis=-1)
         return tf.nn.depthwise_conv2d(
             images, kernel, [1, 1, 1, 1], padding="SAME", data_format="NHWC"
         )
@@ -202,7 +201,6 @@ class MultiCrop(Pseudorandom):
                 images,
                 self.crop_dimen[0],
                 self.crop_dimen[1],
-                tf.image.ResizeMethod.BICUBIC,
             )
         seeds = self._rng.make_seeds(count=self.crop_count)
         crops = []
@@ -213,15 +211,20 @@ class MultiCrop(Pseudorandom):
                 minval=self.crop_scale[0],
                 maxval=self.crop_scale[1],
             )
-            shape = tf.math.round(tf.cast(tf.shape(images)[-3:-1], tf.float32) * scale)
-            shape = tf.concat(
-                [tf.cast(shape, tf.int32), [tf.shape(images)[-1]]], axis=-1
+            dimen = tf.cast(
+                tf.math.round(tf.cast(tf.shape(images)[-3:-1], tf.float32) * scale),
+                tf.int32,
             )
-            shape = tf.concat([tf.shape(images)[:-3], shape], axis=-1)
-            patch = tf.image.stateless_random_crop(images, shape, seeds[:, i])
-            patch = tf.image.resize(
-                patch, self.crop_dimen, method=tf.image.ResizeMethod.BICUBIC
+            limit = tf.shape(images)[-3:-1] - dimen + 1
+            aa = (
+                tf.random.stateless_uniform(
+                    (2,), seed=seeds[:, i], maxval=dimen.dtype.max, dtype=dimen.dtype
+                )
+                % limit
             )
+            bb = aa + dimen
+            patch = images[..., aa[0] : bb[0], aa[1] : bb[1], :]
+            patch = tf.image.resize(patch, self.crop_dimen)
             crops.append(patch)
         return crops
 
@@ -300,8 +303,12 @@ class DINOAugment(Pseudorandom):
         images = tf.image.resize(
             images,
             tf.cast(tf.round(self.image_size), tf.int32),
-            method=tf.image.ResizeMethod.BICUBIC,
         )
+        images = coerce_rgb(images)
+        im_shp = self.image_size
+        im_shp = tf.concat([[-1], im_shp], axis=-1)
+        im_shp = tf.concat([im_shp, [3]], axis=-1)
+        images = tf.reshape(images, im_shp)
         u, v = self.global_crop(images)
         u = self.global_aug_1(u)
         v = self.global_aug_2(v)

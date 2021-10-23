@@ -307,3 +307,33 @@ class MoCoV2(tf.keras.Model):
         self.update_key_encoder()
         self.loss_tr.update_state(error)
         return dict(loss=self.loss_tr.result())
+
+
+class SupCon(tf.keras.Model):
+    def __init__(self, encoder, query_temperature=0.04, key_temperature=1.0, **kwargs):
+        super().__init__(**kwargs)
+        self.encoder = encoder
+        self.projector = add_projection_head(self.encoder, 1024, dropout=0.2)
+        self.loss_tr = tf.keras.metrics.Mean(name="loss")
+        self.tau_q = query_temperature
+        self.tau_k = key_temperature
+
+    def supervised_contrastive_multilabel_loss(self, z, y):
+        z, _ = tf.linalg.normalize(z, ord=2, axis=-1)
+        y, _ = tf.linalg.normalize(y, ord=1, axis=-1)
+        q = z @ tf.transpose(z)
+        k = y @ tf.transpose(y)
+        q *= 1 / self.tau_q
+        k *= 1 / self.tau_k
+        return tf.nn.softmax_cross_entropy_with_logits(k, q, axis=-1)
+
+    def train_step(self, data):
+        x, y = data
+        with tf.GradientTape() as tape:
+            z = self.projector(x)
+            error = self.supervised_contrastive_multilabel_loss(self.projector(x), y)
+        train = self.projector.trainable_variables
+        grads = tape.gradient(error, train)
+        self.optimizer.apply_gradients(zip(grads, train))
+        self.loss_tr.update_state(error)
+        return dict(loss=self.loss_tr.result())
